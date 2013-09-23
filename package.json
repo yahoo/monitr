@@ -1,0 +1,42 @@
+{
+  "name": "monitor",
+  "description": "Node process monitoring tool",
+  "version": "0.0.1",
+  "author": "Rohini Harendra <rohini.raghav@gmail.com>",
+  "os": [ "linux" ],
+  "cpu": [ "x64", "ia32" ],
+  "repository": {
+      "type": "git",
+      "url": "https://github.com/yahoo/node-monitor.git"
+  },
+  "bugs": {
+      "url" : "http://github.com/yahoo/node-monitor/issues"
+  },
+  "keywords": [
+    "node-monitoring", "node-status"
+  ],
+  "licenses":[
+        {
+            "type" : "BSD",
+            "url" : "https://github.com/yahoo/node-monitor/blob/master/LICENSE"
+        }
+    ],
+  "engines": { "node": ">=0.6" },
+  "dependencies": {
+    "bindings": "*"
+  },
+  "devDependencies": {
+    "unix-dgram": ">=0.0.3",
+    "jshint": "~0.9.0",
+    "yui-lint": "~0.1.1",
+    "istanbul": "~0.1.8",
+    "vows": "*"
+  },
+  "main": "./lib/monitor.js",
+  "scripts": {
+      "install": "node-gyp configure build",
+      "pretest": "jshint --config ./node_modules/yui-lint/jshint.json ./lib/",
+      "test": "istanbul cover --print both vows -- --spec ./tests/*.js"
+  }
+}
+
