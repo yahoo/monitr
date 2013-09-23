@@ -1,5 +1,5 @@
 {
-  "name": "monitor",
+  "name": "monitr",
   "description": "Node process monitoring tool",
   "version": "0.0.1",
   "author": "Rohini Harendra <rohini.raghav@gmail.com>",
@@ -7,10 +7,10 @@
   "cpu": [ "x64", "ia32" ],
   "repository": {
       "type": "git",
-      "url": "https://github.com/yahoo/node-monitor.git"
+      "url": "https://github.com/yahoo/monitr.git"
   },
   "bugs": {
-      "url" : "http://github.com/yahoo/node-monitor/issues"
+      "url" : "http://github.com/yahoo/monitr/issues"
   },
   "keywords": [
     "node-monitoring", "node-status"
@@ -18,7 +18,7 @@
   "licenses":[
         {
             "type" : "BSD",
-            "url" : "https://github.com/yahoo/node-monitor/blob/master/LICENSE"
+            "url" : "https://github.com/yahoo/monitr/blob/master/LICENSE"
         }
     ],
   "engines": { "node": ">=0.6" },

@@ -1,4 +1,4 @@
-# monitor
+# monitr
 
 Nodejs process monitoring tool. This module currently works only on LINUX.
 This module spawns a thread and begins monitoring the process. 
@@ -40,12 +40,12 @@ Here is the list of data the module reports periodically:
 With [npm](http://npmjs.org) do:
 
 ```
-npm install monitor
+npm install monitr
 ```
 
 # methods
 ```js
-var monitor = require('monitor');
+var monitor = require('monitr');
 ```
 
 ## start()
