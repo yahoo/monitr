@@ -73,5 +73,11 @@ Sets the handle to write the stats to. If not specified, defaults to /tmp/nodejs
 
 Please refer to the examples/README.md for details
 
+# Build Status
 
+[![Build Status](https://secure.travis-ci.org/yahoo/monitr.png?branch=master)](http://travis-ci.org/yahoo/monitr)
+
+# Node Badge
+
+[![NPM](https://nodei.co/npm/monitr.png)](https://nodei.co/npm/monitr/)
 
