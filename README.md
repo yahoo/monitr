@@ -34,6 +34,8 @@ Here is the list of data the module reports periodically:
  }
 ```
 
+This package is tested only with Node versions 8 and 10.
+
 
 # install
 
@@ -70,5 +72,6 @@ Sets the handle to write the stats to. If not specified, defaults to /tmp/nodejs
 # example
 
 Please refer to the examples/README.md for details
+
 
 
