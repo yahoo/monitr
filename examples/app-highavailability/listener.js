@@ -3,7 +3,7 @@
  * Copyrights licensed under the New BSD License.
  * See the accompanying LICENSE file for terms.
  */
-// Reference : Put the blog post here
+// Reference : http://yahooeng.tumblr.com/post/68823943185/nodejs-high-availability
 var watcher = require('process-watcher');
 
 /*
