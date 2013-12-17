@@ -3,7 +3,7 @@
   "description": "Node process monitoring tool",
   "version": "0.0.1",
   "author": "Rohini Harendra <rohini.raghav@gmail.com>",
-  "os": [ "linux" ],
+  "os": [ "linux", "darwin" ],
   "cpu": [ "x64", "ia32" ],
   "repository": {
       "type": "git",
