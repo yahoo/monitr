@@ -13,22 +13,25 @@ var cluster = require('cluster'),
     status = require('mod_statuspage'),
     timers = require('timers');
 // Spawn numCPUs worker processes
-var numCPUs = require('os').cpus().length;
+var numCPUs = require('os').cpus().length,
+    clusterStartTime = Date.now(),
+    newWorkerEnv = {};
 
 // Master spawns worker processes
 if (cluster.isMaster) {
+  newWorkerEnv.clusterStartTime = clusterStartTime;
 
   // Fork workers
   for (var i = 0; i < numCPUs; i++) {
      console.log('Starting worker ' + i);
-     cluster.fork();
+     cluster.fork(newWorkerEnv);
   }
   
   // If any worker process dies, spawn a new one to bring back number of processes 
   // to be back to numCPUs
   cluster.on('exit', function(worker, code, signal) {
      console.log('worker ' + worker.process.pid + ' died');
-     cluster.fork();
+     cluster.fork(newWorkerEnv);
   });
 
   // Logs to know what workers are active
@@ -40,6 +43,10 @@ if (cluster.isMaster) {
     // Worker process
     // Start monitoring
     monitor.start();
+
+    if (process.env.clusterStartTime) {
+        process.clusterStartTime = new Date(parseInt(process.env.clusterStartTime,10));
+    }
     
     // Simple express app
     var app = express();
