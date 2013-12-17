@@ -4,7 +4,7 @@
  * See the accompanying LICENSE file for terms.
  */
 
-// Reference: TODO put the blog link here
+// Reference: http://yahooeng.tumblr.com/post/68823943185/nodejs-high-availability
 
 var cluster = require('cluster'),
     express = require('express'),
