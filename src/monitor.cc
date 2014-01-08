@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <math.h>
 #include <node.h>
+#include <node_internals.h>
 #include <v8.h>
 #include <v8-debug.h>
 #include <unistd.h>
@@ -28,6 +29,8 @@
 #include <sys/time.h>
 #include <algorithm>
 
+#include <nan.h>
+
 #ifdef __APPLE__
     #include <sys/sysctl.h>
     #include <crt_externs.h>
@@ -37,9 +40,9 @@
 #endif
 
 #define THROW_BAD_ARGS() \
-    return ThrowException( \
+    NanReturnValue(ThrowException( \
         Exception::TypeError(String::New(__FUNCTION__)) \
-    )
+    ))
 
 
 using namespace std;
@@ -135,7 +138,11 @@ void NodeMonitor::setStatistics() {
 
     // obtain memory ration
     v8::HeapStatistics v8stats;
+#if (NODE_MODULE_VERSION > 0x000B)
+    nan_isolate->GetHeapStatistics(&v8stats);
+#else
     V8::GetHeapStatistics(&v8stats);
+#endif
     double pmem = (v8stats.used_heap_size() / (double) v8stats.total_heap_size());
 
     // Obtains the CPU usage
@@ -318,7 +325,7 @@ void CpuUsageTracker::CalculateCpuUsage(CpuUsage* cur_usage,
 
 // calls the function which return the Int value
 unsigned int NodeMonitor::getIntFunction(const char* funcName) {
-    HandleScope scope;
+    NanScope();
 
     Local<Value> pr = Context::GetCurrent()->Global()->Get(String::New("process"));
 
@@ -329,7 +336,7 @@ unsigned int NodeMonitor::getIntFunction(const char* funcName) {
             if (fval->IsFunction()) {
                 Local<Function> fn = Local<Function>::Cast(fval);
                 Local<Value> argv[1];
-                argv[0] = Local<Value>::New(Null());
+                argv[0] = NanNewLocal<Value>(Null());
                 Local<Value> res = fn->Call(Context::GetCurrent()->Global(), 1, argv);
                 if (res->IsNumber()) {
                     return res->Uint32Value();
@@ -508,29 +515,32 @@ NodeMonitor::NodeMonitor() :
     memset(&ipcAddr_, 0,sizeof(struct sockaddr_un));
 }
 
-static Handle<Value> GetterIPCMonitorPath(Local<String> property,
-const AccessorInfo& info) {
-    return String::New(_ipcMonitorPath.c_str());
+static NAN_GETTER(GetterIPCMonitorPath) {
+    NanScope();
+    NanReturnValue(String::New(_ipcMonitorPath.c_str()));
 }
 
-static Handle<Value> SetterIPCMonitorPath(const Arguments& args) {
+static NAN_METHOD(SetterIPCMonitorPath) {
+    NanScope();
     if (args.Length() < 1 ||
         (!args[0]->IsString() && !args[0]->IsUndefined() && !args[0]->IsNull())) {
         THROW_BAD_ARGS();
     }
     String::Utf8Value ipcMonitorPath(args[0]);
     _ipcMonitorPath = *ipcMonitorPath;
-    return Undefined();;
+    NanReturnValue(Undefined());
 }
 
-static Handle<Value> StartMonitor(const Arguments& args) {
+static NAN_METHOD(StartMonitor) {
+    NanScope();
     NodeMonitor::Initialize();
-    return Undefined();
+    NanReturnValue(Undefined());
 }
 
-static Handle<Value> StopMonitor(const Arguments& args) {
+static NAN_METHOD(StopMonitor) {
+    NanScope();
     NodeMonitor::Stop();
-    return Undefined();
+    NanReturnValue(Undefined());
 }
 
 void LogStackTrace(Handle<Object> obj) {
@@ -573,19 +583,31 @@ void DebugEventHandler(DebugEvent event,
     LogStackTrace(exec_state);
 }
 
+void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
+   LogStackTrace(event_details.GetExecutionState());
+}
+
 static void SignalHangupHandler(int signal) {
+#if (NODE_MODULE_VERSION > 0x000B)
+// Node 0.11+
+    v8::Debug::SetDebugEventListener2(DebugEventHandler2);
+#else
     v8::Debug::SetDebugEventListener(DebugEventHandler);
+#endif
     v8::Debug::DebugBreak();
 }
 
 extern "C" void
 init(Handle<Object> target) {
-    HandleScope scope;
+    NanScope();
 
     NODE_PROT_RO_PROPERTY(target, "ipcMonitorPath", GetterIPCMonitorPath);
-    NODE_SET_METHOD(target, "setIpcMonitorPath", SetterIPCMonitorPath);
-    NODE_SET_METHOD(target, "start", StartMonitor);
-    NODE_SET_METHOD(target, "stop", StopMonitor);
+    target->Set(NanSymbol("setIpcMonitorPath"),
+        FunctionTemplate::New(SetterIPCMonitorPath)->GetFunction());
+    target->Set(NanSymbol("start"),
+        FunctionTemplate::New(StartMonitor)->GetFunction());
+    target->Set(NanSymbol("stop"),
+        FunctionTemplate::New(StopMonitor)->GetFunction());
 
     RegisterSignalHandler(SIGHUP, SignalHangupHandler);
 }
