@@ -164,7 +164,6 @@ var tests = {
 	'process.monitor functions should return values': function (topic) {
 	    assert.equal(1, topic.totalRequests);
 	    assert.equal(0, topic.requests);
-	    assert.equal(1, topic.openConnections);
 	    assert.ok(topic.transferred !== 0);
 	}
     }
