@@ -543,6 +543,7 @@ static NAN_METHOD(StopMonitor) {
     NanReturnValue(Undefined());
 }
 
+
 void LogStackTrace(Handle<Object> obj) {
     try {
         Local<Value> args[] = {};
@@ -576,15 +577,23 @@ void LogStackTrace(Handle<Object> obj) {
     
 }
 
+void LogPid(Handle<Object> obj) {
+    char pid_s[20];
+    pid_t pid = getpid();
+
+    snprintf(pid_s, sizeof(pid_s), "%d", pid);
+    cout << "Process " << pid_s << " received SIGHUP." << endl;
+}
+
 void DebugEventHandler(DebugEvent event,
        Handle<Object> exec_state,
        Handle<Object> event_data,
        Handle<Value> data) {
-    LogStackTrace(exec_state);
+    LogPid(exec_state);
 }
 
 void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
-   LogStackTrace(event_details.GetExecutionState());
+   LogPid(event_details.GetExecutionState());
 }
 
 static void SignalHangupHandler(int signal) {
