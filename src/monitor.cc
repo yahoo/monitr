@@ -543,48 +543,23 @@ static NAN_METHOD(StopMonitor) {
     NanReturnValue(Undefined());
 }
 
-void LogStackTrace(Handle<Object> obj) {
-    try {
-        Local<Value> args[] = {};
-        Local<Value> frameCount = obj->Get(String::New("frameCount"));
-        Local<Function> frameCountFunc = Local<Function>::Cast(frameCount);
-        Local<Value> frameCountVal = frameCountFunc->Call(obj, 0, args);
-        Local<Number> frameCountNum = frameCountVal->ToNumber();
-        
-        cout << "Stack Trace:" << endl;
-        
-        int totalFrames = frameCountNum->Value();
-        for(int i = 0; i < totalFrames; i++) {
-            Local<Value> frameNumber[] = {Number::New(i)};
-            Local<Value> setSelectedFrame = obj->Get(String::New("setSelectedFrame"));
-            Local<Function> setSelectedFrameFunc = Local<Function>::Cast(setSelectedFrame);
-            setSelectedFrameFunc->Call(obj, 1, frameNumber);
-            
-            Local<Value> frame = obj->Get(String::New("frame"));
-            Local<Function> frameFunc = Local<Function>::Cast(frame);
-            Local<Value> frameVal = frameFunc->Call(obj, 0, args);
-            Local<Object> frameObj = frameVal->ToObject();
-            Local<Value> frameToText = frameObj->Get(String::New("toText"));
-            Local<Function> frameToTextFunc = Local<Function>::Cast(frameToText);
-            Local<Value> frameToTextVal = frameToTextFunc->Call(frameObj, 0, args);
-            String::Utf8Value frameText(frameToTextVal);
-            cout << *frameText << endl;
-        }
-    } catch(exception  e) {
-        cerr << "Error occured while logging stack trace:" << e.what() << endl;
-    }
-    
+void LogPid(Handle<Object> obj) {
+    char pid_s[20];
+    pid_t pid = getpid();
+
+    snprintf(pid_s, sizeof(pid_s), "%d", pid);
+    cout << "Process " << pid_s << " received SIGHUP." << endl;
 }
 
 void DebugEventHandler(DebugEvent event,
        Handle<Object> exec_state,
        Handle<Object> event_data,
        Handle<Value> data) {
-    LogStackTrace(exec_state);
+    LogPid(exec_state);
 }
 
 void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
-   LogStackTrace(event_details.GetExecutionState());
+   LogPid(event_details.GetExecutionState());
 }
 
 static void SignalHangupHandler(int signal) {
