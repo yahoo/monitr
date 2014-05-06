@@ -194,6 +194,10 @@ void NodeMonitor::setStatistics() {
 
     instance_->stats_.lastKBytesSecond = (dataTransferred - instance_->stats_.lastKBytesTransfered_) / (((double) timeDelta) / 1000);
     instance_->stats_.lastKBytesTransfered_ = dataTransferred;
+    instance_->stats_.lastMajorStatus_ = getIntFunction("getMajorStatus", -1);
+    instance_->stats_.lastMinorStatus_ = getIntFunction("getMinorStatus", -1);
+    instance_->stats_.lastStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
+
     instance_->stats_.pmem_ = pmem;
 }
 
@@ -324,7 +328,7 @@ void CpuUsageTracker::CalculateCpuUsage(CpuUsage* cur_usage,
 }
 
 // calls the function which return the Int value
-unsigned int NodeMonitor::getIntFunction(const char* funcName) {
+int NodeMonitor::getIntFunction(const char* funcName, int retValue /* = 0 */) {
     NanScope();
 
     Local<Value> pr = Context::GetCurrent()->Global()->Get(String::New("process"));
@@ -332,7 +336,7 @@ unsigned int NodeMonitor::getIntFunction(const char* funcName) {
     if (pr->IsObject()) {
         Local<Value> exten = pr->ToObject()->Get(String::New("monitor"));
         if (exten->IsObject()) {
-        Local<Value> fval = exten->ToObject()->Get(String::New(funcName));
+            Local<Value> fval = exten->ToObject()->Get(String::New(funcName));
             if (fval->IsFunction()) {
                 Local<Function> fn = Local<Function>::Cast(fval);
                 Local<Value> argv[1];
@@ -346,7 +350,7 @@ unsigned int NodeMonitor::getIntFunction(const char* funcName) {
         }
     }
     scope.Close(Integer::New(0));
-    return 0;
+    return retValue;
 }
 
 bool NodeMonitor::sendReport() {
@@ -462,11 +466,26 @@ bool NodeMonitor::sendReport() {
     }
 
     // Kb transferred per second
-    snprintf(buffer, sizeof(buffer), "\"kbs_out\":%.2f", stats.lastKBytesSecond);
+    snprintf(buffer, sizeof(buffer), "\"kbs_out\":%.2f,", stats.lastKBytesSecond);
     if (!strstr(buffer, "nan")) {
         data.append(buffer);
     }	
 
+    snprintf(buffer, sizeof(buffer), "\"last_major_status\":%d,", stats.lastMajorStatus_);
+    if (!strstr(buffer, "-1")) {
+        data.append(buffer);
+    }
+    snprintf(buffer, sizeof(buffer), "\"last_minor_status\":%d,", stats.lastMinorStatus_);
+    if (!strstr(buffer, "-1")) {
+        data.append(buffer);
+    }
+    
+    snprintf(buffer, sizeof(buffer), "\"status_timestamp\":%ld,", stats.lastStatusTimestamp_);
+    if (!strstr(buffer, "0")) {
+        data.append(buffer);
+    }
+    data.erase(data.size() - 1);; //get rid of last comma
+    
     data.append("}}");
 
     // Send datagram notification to the listener

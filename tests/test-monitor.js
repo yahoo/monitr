@@ -122,19 +122,20 @@ var tests = {
         }).on('error', function (e) {
             console.error('Error ' + e.message);
         });
-
-        monitorSocket = dgram.createSocket('unix_dgram',
-            function (msg, rinfo) {
+	setTimeout(function() {
+	    monitorSocket = dgram.createSocket('unix_dgram',function (msg, rinfo) {
                 console.log('message: ' + msg.toString());
                 msgObj = JSON.parse(msg.toString());
 		monitorSocket.close();
-		return self.callback(null, {
-                    totalRequests: totalRequests,
-		    requests: requests,
-		    openConnections: openConnections,
-		    transferred: transferred,
-                    msgObj: msgObj
-                });
+		
+		    return self.callback(null, {
+			totalRequests: totalRequests,
+			requests: requests,
+			openConnections: openConnections,
+			transferred: transferred,
+			msgObj: msgObj
+		    });		    
+		
             });
             fs.unlink(monitor.ipcMonitorPath,
                 function (err) {
@@ -153,6 +154,7 @@ var tests = {
                     monitorSocket.bind(monitor.ipcMonitorPath);
                     process.umask(um);
             });
+	}, 1100);
         },
         'should have all expected properties': function (topic) {
 	    assert.ok(topic.msgObj.hasOwnProperty('status'));
@@ -165,6 +167,53 @@ var tests = {
 	    assert.equal(1, topic.totalRequests);
 	    assert.equal(0, topic.requests);
 	    assert.ok(topic.transferred !== 0);
+	},
+	'Verify with health check enabled' : {
+	    topic : function() {
+		var self2 = this;
+		monitor.enableHealthInformation();
+		process.monitor.setHealthStatus(200,0);
+		setTimeout(function() {
+		    monitorSocket = dgram.createSocket('unix_dgram',function (msg, rinfo) {
+			console.log('message: ' + msg.toString());
+			msgObj = JSON.parse(msg.toString());
+			monitorSocket.close();
+			    return self2.callback(null, {
+				majorStatus: process.monitor.getMajorStatus(),
+				minorStatus: process.monitor.getMinorStatus(),
+				timestamp: process.monitor.getStatusTimestamp(),
+				date : process.monitor.getStatusDate(),
+				msgObj: msgObj
+			    });		    
+			
+		    });
+		    fs.unlink(monitor.ipcMonitorPath,
+			function (err) {
+			    if (err) {
+				console.log("Deleted socket with ERROR " + err.stack);
+			    }
+			    // get a directory and set a umask
+			    var dir = require('path').dirname(monitor.ipcMonitorPath),
+				um = process.umask(0);
+	
+			    try {
+				mkdirs(dir, 511);
+			    } catch (ex) {
+				console.log("ERROR: Failed to create directory for socket " + ex.stack);
+			    }
+			    monitorSocket.bind(monitor.ipcMonitorPath);
+			    process.umask(um);
+		    });
+		}, 1100);
+	    },
+	    'validate health information': function (topic) {
+		assert.equal(200, topic.majorStatus);
+		assert.equal(0, topic.minorStatus);
+		assert.equal(200, topic.msgObj.status.last_major_status);
+		assert.equal(0, topic.msgObj.status.last_minor_status);
+		assert.equal(topic.timestamp, topic.msgObj.status.status_timestamp);
+		assert.ok(Date.now() - topic.date.getTime() <= 2 * 60 * 1000); //less than 2 min
+	    } 
 	}
     }
 };
