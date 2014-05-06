@@ -40,9 +40,7 @@
 #endif
 
 #define THROW_BAD_ARGS() \
-    NanReturnValue(ThrowException( \
-        Exception::TypeError(String::New(__FUNCTION__)) \
-    ))
+    NanThrowError(Exception::TypeError(String::New(__FUNCTION__)))
 
 
 using namespace std;
@@ -336,7 +334,7 @@ unsigned int NodeMonitor::getIntFunction(const char* funcName) {
             if (fval->IsFunction()) {
                 Local<Function> fn = Local<Function>::Cast(fval);
                 Local<Value> argv[1];
-                argv[0] = NanNewLocal<Value>(Null());
+                argv[0] = NanNew(NanNull());
                 Local<Value> res = fn->Call(Context::GetCurrent()->Global(), 1, argv);
                 if (res->IsNumber()) {
                     return res->Uint32Value();
@@ -528,19 +526,19 @@ static NAN_METHOD(SetterIPCMonitorPath) {
     }
     String::Utf8Value ipcMonitorPath(args[0]);
     _ipcMonitorPath = *ipcMonitorPath;
-    NanReturnValue(Undefined());
+    NanReturnValue(NanUndefined());
 }
 
 static NAN_METHOD(StartMonitor) {
     NanScope();
     NodeMonitor::Initialize();
-    NanReturnValue(Undefined());
+    NanReturnValue(NanUndefined());
 }
 
 static NAN_METHOD(StopMonitor) {
     NanScope();
     NodeMonitor::Stop();
-    NanReturnValue(Undefined());
+    NanReturnValue(NanUndefined());
 }
 
 
