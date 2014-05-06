@@ -168,19 +168,18 @@ var tests = {
 	    assert.equal(0, topic.requests);
 	    assert.ok(topic.transferred !== 0);
 	},
-	'Verify with health check enabled' : {
+	'Verify health check values' : {
 	    topic : function() {
 		var self2 = this;
-		monitor.enableHealthInformation();
-		process.monitor.setHealthStatus(200,0);
+		process.monitor.setHealthStatus(true,200);
 		setTimeout(function() {
 		    monitorSocket = dgram.createSocket('unix_dgram',function (msg, rinfo) {
 			console.log('message: ' + msg.toString());
 			msgObj = JSON.parse(msg.toString());
 			monitorSocket.close();
 			    return self2.callback(null, {
-				majorStatus: process.monitor.getMajorStatus(),
-				minorStatus: process.monitor.getMinorStatus(),
+				isDown: process.monitor.isDown(),
+				statusCode: process.monitor.getStatusCode(),
 				timestamp: process.monitor.getStatusTimestamp(),
 				date : process.monitor.getStatusDate(),
 				msgObj: msgObj
@@ -207,11 +206,11 @@ var tests = {
 		}, 1100);
 	    },
 	    'validate health information': function (topic) {
-		assert.equal(200, topic.majorStatus);
-		assert.equal(0, topic.minorStatus);
-		assert.equal(200, topic.msgObj.status.last_major_status);
-		assert.equal(0, topic.msgObj.status.last_minor_status);
-		assert.equal(topic.timestamp, topic.msgObj.status.status_timestamp);
+		assert.equal(true, topic.isDown);
+		assert.equal(200, topic.statusCode);
+		assert.equal(200, topic.msgObj.status.health_status_code);
+		assert.equal(true, topic.msgObj.status.health_is_down);
+		assert.equal(topic.timestamp, topic.msgObj.status.health_status_timestamp);
 		assert.ok(Date.now() - topic.date.getTime() <= 2 * 60 * 1000); //less than 2 min
 	    } 
 	}

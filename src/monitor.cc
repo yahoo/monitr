@@ -40,9 +40,7 @@
 #endif
 
 #define THROW_BAD_ARGS() \
-    NanReturnValue(ThrowException( \
-        Exception::TypeError(String::New(__FUNCTION__)) \
-    ))
+    NanThrowError(Exception::TypeError(String::New(__FUNCTION__)))
 
 
 using namespace std;
@@ -194,9 +192,9 @@ void NodeMonitor::setStatistics() {
 
     instance_->stats_.lastKBytesSecond = (dataTransferred - instance_->stats_.lastKBytesTransfered_) / (((double) timeDelta) / 1000);
     instance_->stats_.lastKBytesTransfered_ = dataTransferred;
-    instance_->stats_.lastMajorStatus_ = getIntFunction("getMajorStatus", -1);
-    instance_->stats_.lastMinorStatus_ = getIntFunction("getMinorStatus", -1);
-    instance_->stats_.lastStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
+    instance_->stats_.healthIsDown_ = getBooleanFunction("isDown");
+    instance_->stats_.healthStatusCode_ = getIntFunction("getStatusCode");
+    instance_->stats_.healthStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
 
     instance_->stats_.pmem_ = pmem;
 }
@@ -327,10 +325,9 @@ void CpuUsageTracker::CalculateCpuUsage(CpuUsage* cur_usage,
         - (last_usage->stime_ticks + last_usage->cstime_ticks));
 }
 
-// calls the function which return the Int value
-int NodeMonitor::getIntFunction(const char* funcName, int retValue /* = 0 */) {
-    NanScope();
-
+Local<Value> callFunction(const char* funcName) {
+    NanEscapableScope();
+    
     Local<Value> pr = Context::GetCurrent()->Global()->Get(String::New("process"));
 
     if (pr->IsObject()) {
@@ -340,17 +337,32 @@ int NodeMonitor::getIntFunction(const char* funcName, int retValue /* = 0 */) {
             if (fval->IsFunction()) {
                 Local<Function> fn = Local<Function>::Cast(fval);
                 Local<Value> argv[1];
-                argv[0] = NanNewLocal<Value>(Null());
-                Local<Value> res = fn->Call(Context::GetCurrent()->Global(), 1, argv);
-                if (res->IsNumber()) {
-                    return res->Uint32Value();
-                }
-            } else {
+                argv[0] = NanNew(NanNull());
+                return  NanEscapeScope(fn->Call(Context::GetCurrent()->Global(), 1, argv));
             }
         }
     }
-    scope.Close(Integer::New(0));
-    return retValue;
+    return NanEscapeScope(NanNew(NanNull()));
+        
+}
+
+// calls the function which return the Int value
+int NodeMonitor::getIntFunction(const char* funcName) {
+    NanScope();
+    Local<Value> res = callFunction(funcName);
+    if (res->IsNumber()) {
+        return res->Uint32Value();
+    }
+    return 0;
+}
+    
+bool NodeMonitor::getBooleanFunction(const char* funcName) {
+    NanScope();
+    Local<Value> res = callFunction(funcName);
+    if (res->IsBoolean()) {
+        return res->BooleanValue();
+    }
+    return false;
 }
 
 bool NodeMonitor::sendReport() {
@@ -471,18 +483,19 @@ bool NodeMonitor::sendReport() {
         data.append(buffer);
     }	
 
-    snprintf(buffer, sizeof(buffer), "\"last_major_status\":%d,", stats.lastMajorStatus_);
-    if (!strstr(buffer, "-1")) {
-        data.append(buffer);
-    }
-    snprintf(buffer, sizeof(buffer), "\"last_minor_status\":%d,", stats.lastMinorStatus_);
-    if (!strstr(buffer, "-1")) {
-        data.append(buffer);
-    }
     
-    snprintf(buffer, sizeof(buffer), "\"status_timestamp\":%ld,", stats.lastStatusTimestamp_);
-    if (!strstr(buffer, "0")) {
+    snprintf(buffer, sizeof(buffer), "\"health_status_timestamp\":%ld,", stats.healthStatusTimestamp_);
+    if (!strstr(buffer, ":0")) { //:0 coz the value needs to be 0, just 0 will match with any 0 in between
         data.append(buffer);
+        
+        //Add the rest health statistics only if health timestamp is not 0
+        snprintf(buffer, sizeof(buffer), "\"health_is_down\":%d,", stats.healthIsDown_);
+        data.append(buffer);
+
+        snprintf(buffer, sizeof(buffer), "\"health_status_code\":%d,", stats.healthStatusCode_);
+        if (!strstr(buffer, "nan")) {
+            data.append(buffer);
+        }	
     }
     data.erase(data.size() - 1);; //get rid of last comma
     
@@ -547,19 +560,19 @@ static NAN_METHOD(SetterIPCMonitorPath) {
     }
     String::Utf8Value ipcMonitorPath(args[0]);
     _ipcMonitorPath = *ipcMonitorPath;
-    NanReturnValue(Undefined());
+    NanReturnValue(NanUndefined());
 }
 
 static NAN_METHOD(StartMonitor) {
     NanScope();
     NodeMonitor::Initialize();
-    NanReturnValue(Undefined());
+    NanReturnValue(NanUndefined());
 }
 
 static NAN_METHOD(StopMonitor) {
     NanScope();
     NodeMonitor::Stop();
-    NanReturnValue(Undefined());
+    NanReturnValue(NanUndefined());
 }
 
 
