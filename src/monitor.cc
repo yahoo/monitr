@@ -40,7 +40,7 @@
 #endif
 
 #define THROW_BAD_ARGS() \
-    NanThrowError(Exception::TypeError(String::New(__FUNCTION__)))
+    NanThrowError(Exception::TypeError(NanNew<String>(__FUNCTION__)));
 
 
 using namespace std;
