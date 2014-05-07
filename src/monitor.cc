@@ -483,19 +483,16 @@ bool NodeMonitor::sendReport() {
         data.append(buffer);
     }	
 
-    
-    snprintf(buffer, sizeof(buffer), "\"health_status_timestamp\":%ld,", stats.healthStatusTimestamp_);
-    if (!strstr(buffer, ":0")) { //:0 coz the value needs to be 0, just 0 will match with any 0 in between
+    if (stats.healthStatusTimestamp_ != 0) { //:0 coz the value needs to be 0, just 0 will match with any 0 in between
+        snprintf(buffer, sizeof(buffer), "\"health_status_timestamp\":%ld,", stats.healthStatusTimestamp_);
         data.append(buffer);
-        
+
         //Add the rest health statistics only if health timestamp is not 0
         snprintf(buffer, sizeof(buffer), "\"health_is_down\":%s,", (stats.healthIsDown_ ? "true" : "false"));
         data.append(buffer);
 
         snprintf(buffer, sizeof(buffer), "\"health_status_code\":%d,", stats.healthStatusCode_);
-        if (!strstr(buffer, "nan")) {
-            data.append(buffer);
-        }	
+        data.append(buffer);
     }
     data.erase(data.size() - 1);; //get rid of last comma
     
