@@ -212,6 +212,13 @@ var tests = {
 		assert.equal(true, topic.msgObj.status.health_is_down);
 		assert.equal(topic.timestamp, topic.msgObj.status.health_status_timestamp);
 		assert.ok(Date.now() - topic.date.getTime() <= 2 * 60 * 1000); //less than 2 min
+		
+		process.monitor.setHealthStatus(false,300);
+		assert.equal(false, process.monitor.isDown());
+		assert.equal(300, process.monitor.getStatusCode());
+		assert.ok(process.monitor.getStatusTimestamp() > topic.timestamp);
+		
+		
 	    } 
 	}
     }

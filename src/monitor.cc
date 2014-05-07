@@ -328,12 +328,12 @@ void CpuUsageTracker::CalculateCpuUsage(CpuUsage* cur_usage,
 Local<Value> callFunction(const char* funcName) {
     NanEscapableScope();
     
-    Local<Value> pr = Context::GetCurrent()->Global()->Get(String::New("process"));
+    Local<Value> pr = Context::GetCurrent()->Global()->Get(NanNew<String>("process"));
 
     if (pr->IsObject()) {
-        Local<Value> exten = pr->ToObject()->Get(String::New("monitor"));
+        Local<Value> exten = pr->ToObject()->Get(NanNew<String>("monitor"));
         if (exten->IsObject()) {
-            Local<Value> fval = exten->ToObject()->Get(String::New(funcName));
+            Local<Value> fval = exten->ToObject()->Get(NanNew<String>(funcName));
             if (fval->IsFunction()) {
                 Local<Function> fn = Local<Function>::Cast(fval);
                 Local<Value> argv[1];
@@ -489,7 +489,7 @@ bool NodeMonitor::sendReport() {
         data.append(buffer);
         
         //Add the rest health statistics only if health timestamp is not 0
-        snprintf(buffer, sizeof(buffer), "\"health_is_down\":%d,", stats.healthIsDown_);
+        snprintf(buffer, sizeof(buffer), "\"health_is_down\":%s,", (stats.healthIsDown_ ? "true" : "false"));
         data.append(buffer);
 
         snprintf(buffer, sizeof(buffer), "\"health_status_code\":%d,", stats.healthStatusCode_);
@@ -549,7 +549,7 @@ NodeMonitor::NodeMonitor() :
 
 static NAN_GETTER(GetterIPCMonitorPath) {
     NanScope();
-    NanReturnValue(String::New(_ipcMonitorPath.c_str()));
+    NanReturnValue(NanNew<String>(_ipcMonitorPath.c_str()));
 }
 
 static NAN_METHOD(SetterIPCMonitorPath) {
@@ -579,7 +579,7 @@ static NAN_METHOD(StopMonitor) {
 void LogStackTrace(Handle<Object> obj) {
     try {
         Local<Value> args[] = {};
-        Local<Value> frameCount = obj->Get(String::New("frameCount"));
+        Local<Value> frameCount = obj->Get(NanNew<String>("frameCount"));
         Local<Function> frameCountFunc = Local<Function>::Cast(frameCount);
         Local<Value> frameCountVal = frameCountFunc->Call(obj, 0, args);
         Local<Number> frameCountNum = frameCountVal->ToNumber();
@@ -589,15 +589,15 @@ void LogStackTrace(Handle<Object> obj) {
         int totalFrames = frameCountNum->Value();
         for(int i = 0; i < totalFrames; i++) {
             Local<Value> frameNumber[] = {Number::New(i)};
-            Local<Value> setSelectedFrame = obj->Get(String::New("setSelectedFrame"));
+            Local<Value> setSelectedFrame = obj->Get(NanNew<String>("setSelectedFrame"));
             Local<Function> setSelectedFrameFunc = Local<Function>::Cast(setSelectedFrame);
             setSelectedFrameFunc->Call(obj, 1, frameNumber);
             
-            Local<Value> frame = obj->Get(String::New("frame"));
+            Local<Value> frame = obj->Get(NanNew<String>("frame"));
             Local<Function> frameFunc = Local<Function>::Cast(frame);
             Local<Value> frameVal = frameFunc->Call(obj, 0, args);
             Local<Object> frameObj = frameVal->ToObject();
-            Local<Value> frameToText = frameObj->Get(String::New("toText"));
+            Local<Value> frameToText = frameObj->Get(NanNew<String>("toText"));
             Local<Function> frameToTextFunc = Local<Function>::Cast(frameToText);
             Local<Value> frameToTextVal = frameToTextFunc->Call(frameObj, 0, args);
             String::Utf8Value frameText(frameToTextVal);
