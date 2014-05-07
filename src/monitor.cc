@@ -483,7 +483,7 @@ bool NodeMonitor::sendReport() {
         data.append(buffer);
     }	
 
-    if (stats.healthStatusTimestamp_ != 0) { //:0 coz the value needs to be 0, just 0 will match with any 0 in between
+    if (stats.healthStatusTimestamp_ != 0) {
         snprintf(buffer, sizeof(buffer), "\"health_status_timestamp\":%ld,", stats.healthStatusTimestamp_);
         data.append(buffer);
 
