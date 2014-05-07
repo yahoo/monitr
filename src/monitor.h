@@ -90,6 +90,15 @@ typedef struct {
 	// Kb transfered since start
 	volatile float lastKBytesTransfered_;
 	volatile float lastKBytesSecond;
+	
+	// health status isDown
+	volatile bool healthIsDown_;
+	
+	// health status: statusCode
+	volatile int healthStatusCode_;
+	
+	volatile time_t healthStatusTimestamp_;
+	
 	volatile double pmem_;
 	
 } Statistics;
@@ -152,7 +161,8 @@ class NodeMonitor {
   int ipcSocket_;
   
   NodeMonitor();
-  static unsigned int getIntFunction(const char* funcName);
+  static int getIntFunction(const char* funcName);
+  static bool getBooleanFunction(const char* funcName);
 };
 
 }

@@ -69,6 +69,23 @@ monitor.setIpcMonitorPath('/tmp/my-process-stats.mon');
 ```
 Sets the handle to write the stats to. If not specified, defaults to /tmp/nodejs.mon
 
+# Health Status
+Monitr is now enhanced with custom health functionality wherein the app can report its own health.
+Following methods are added to process.monitor to set and get the health information.
+```js
+setHealthStatus(isDown, statusCode)
+isDown()
+getStatusCode()
+getStatusTimestamp() - Return in seconds
+getStatusDate() - Return Date object
+```
+Once setHealthStatus is invoked, the status json, described above, will have following additional fields.
+```js
+health_status_timestamp: <timestamp when the setHealthStatus was invoked, in sec>,
+health_is_down: <app is down or up, boolean>,
+health_status_code: <health status code>
+```
+
 # example
 
 Please refer to the examples/README.md for details

@@ -40,9 +40,7 @@
 #endif
 
 #define THROW_BAD_ARGS() \
-    NanReturnValue(ThrowException( \
-        Exception::TypeError(String::New(__FUNCTION__)) \
-    ))
+    NanThrowError(Exception::TypeError(NanNew<String>(__FUNCTION__)));
 
 
 using namespace std;
@@ -194,6 +192,10 @@ void NodeMonitor::setStatistics() {
 
     instance_->stats_.lastKBytesSecond = (dataTransferred - instance_->stats_.lastKBytesTransfered_) / (((double) timeDelta) / 1000);
     instance_->stats_.lastKBytesTransfered_ = dataTransferred;
+    instance_->stats_.healthIsDown_ = getBooleanFunction("isDown");
+    instance_->stats_.healthStatusCode_ = getIntFunction("getStatusCode");
+    instance_->stats_.healthStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
+
     instance_->stats_.pmem_ = pmem;
 }
 
@@ -323,30 +325,44 @@ void CpuUsageTracker::CalculateCpuUsage(CpuUsage* cur_usage,
         - (last_usage->stime_ticks + last_usage->cstime_ticks));
 }
 
-// calls the function which return the Int value
-unsigned int NodeMonitor::getIntFunction(const char* funcName) {
-    NanScope();
-
-    Local<Value> pr = Context::GetCurrent()->Global()->Get(String::New("process"));
+Local<Value> callFunction(const char* funcName) {
+    NanEscapableScope();
+    
+    Local<Value> pr = Context::GetCurrent()->Global()->Get(NanNew<String>("process"));
 
     if (pr->IsObject()) {
-        Local<Value> exten = pr->ToObject()->Get(String::New("monitor"));
+        Local<Value> exten = pr->ToObject()->Get(NanNew<String>("monitor"));
         if (exten->IsObject()) {
-        Local<Value> fval = exten->ToObject()->Get(String::New(funcName));
+            Local<Value> fval = exten->ToObject()->Get(NanNew<String>(funcName));
             if (fval->IsFunction()) {
                 Local<Function> fn = Local<Function>::Cast(fval);
                 Local<Value> argv[1];
-                argv[0] = NanNewLocal<Value>(Null());
-                Local<Value> res = fn->Call(Context::GetCurrent()->Global(), 1, argv);
-                if (res->IsNumber()) {
-                    return res->Uint32Value();
-                }
-            } else {
+                argv[0] = NanNew(NanNull());
+                return  NanEscapeScope(fn->Call(Context::GetCurrent()->Global(), 1, argv));
             }
         }
     }
-    scope.Close(Integer::New(0));
+    return NanEscapeScope(NanNew(NanNull()));
+        
+}
+
+// calls the function which return the Int value
+int NodeMonitor::getIntFunction(const char* funcName) {
+    NanScope();
+    Local<Value> res = callFunction(funcName);
+    if (res->IsNumber()) {
+        return res->Uint32Value();
+    }
     return 0;
+}
+    
+bool NodeMonitor::getBooleanFunction(const char* funcName) {
+    NanScope();
+    Local<Value> res = callFunction(funcName);
+    if (res->IsBoolean()) {
+        return res->BooleanValue();
+    }
+    return false;
 }
 
 bool NodeMonitor::sendReport() {
@@ -462,11 +478,24 @@ bool NodeMonitor::sendReport() {
     }
 
     // Kb transferred per second
-    snprintf(buffer, sizeof(buffer), "\"kbs_out\":%.2f", stats.lastKBytesSecond);
+    snprintf(buffer, sizeof(buffer), "\"kbs_out\":%.2f,", stats.lastKBytesSecond);
     if (!strstr(buffer, "nan")) {
         data.append(buffer);
     }	
 
+    if (stats.healthStatusTimestamp_ != 0) {
+        snprintf(buffer, sizeof(buffer), "\"health_status_timestamp\":%ld,", stats.healthStatusTimestamp_);
+        data.append(buffer);
+
+        //Add the rest health statistics only if health timestamp is not 0
+        snprintf(buffer, sizeof(buffer), "\"health_is_down\":%s,", (stats.healthIsDown_ ? "true" : "false"));
+        data.append(buffer);
+
+        snprintf(buffer, sizeof(buffer), "\"health_status_code\":%d,", stats.healthStatusCode_);
+        data.append(buffer);
+    }
+    data.erase(data.size() - 1);; //get rid of last comma
+    
     data.append("}}");
 
     // Send datagram notification to the listener
@@ -517,7 +546,7 @@ NodeMonitor::NodeMonitor() :
 
 static NAN_GETTER(GetterIPCMonitorPath) {
     NanScope();
-    NanReturnValue(String::New(_ipcMonitorPath.c_str()));
+    NanReturnValue(NanNew<String>(_ipcMonitorPath.c_str()));
 }
 
 static NAN_METHOD(SetterIPCMonitorPath) {
@@ -528,26 +557,26 @@ static NAN_METHOD(SetterIPCMonitorPath) {
     }
     String::Utf8Value ipcMonitorPath(args[0]);
     _ipcMonitorPath = *ipcMonitorPath;
-    NanReturnValue(Undefined());
+    NanReturnValue(NanUndefined());
 }
 
 static NAN_METHOD(StartMonitor) {
     NanScope();
     NodeMonitor::Initialize();
-    NanReturnValue(Undefined());
+    NanReturnValue(NanUndefined());
 }
 
 static NAN_METHOD(StopMonitor) {
     NanScope();
     NodeMonitor::Stop();
-    NanReturnValue(Undefined());
+    NanReturnValue(NanUndefined());
 }
 
 
 void LogStackTrace(Handle<Object> obj) {
     try {
         Local<Value> args[] = {};
-        Local<Value> frameCount = obj->Get(String::New("frameCount"));
+        Local<Value> frameCount = obj->Get(NanNew<String>("frameCount"));
         Local<Function> frameCountFunc = Local<Function>::Cast(frameCount);
         Local<Value> frameCountVal = frameCountFunc->Call(obj, 0, args);
         Local<Number> frameCountNum = frameCountVal->ToNumber();
@@ -557,15 +586,15 @@ void LogStackTrace(Handle<Object> obj) {
         int totalFrames = frameCountNum->Value();
         for(int i = 0; i < totalFrames; i++) {
             Local<Value> frameNumber[] = {Number::New(i)};
-            Local<Value> setSelectedFrame = obj->Get(String::New("setSelectedFrame"));
+            Local<Value> setSelectedFrame = obj->Get(NanNew<String>("setSelectedFrame"));
             Local<Function> setSelectedFrameFunc = Local<Function>::Cast(setSelectedFrame);
             setSelectedFrameFunc->Call(obj, 1, frameNumber);
             
-            Local<Value> frame = obj->Get(String::New("frame"));
+            Local<Value> frame = obj->Get(NanNew<String>("frame"));
             Local<Function> frameFunc = Local<Function>::Cast(frame);
             Local<Value> frameVal = frameFunc->Call(obj, 0, args);
             Local<Object> frameObj = frameVal->ToObject();
-            Local<Value> frameToText = frameObj->Get(String::New("toText"));
+            Local<Value> frameToText = frameObj->Get(NanNew<String>("toText"));
             Local<Function> frameToTextFunc = Local<Function>::Cast(frameToText);
             Local<Value> frameToTextVal = frameToTextFunc->Call(frameObj, 0, args);
             String::Utf8Value frameText(frameToTextVal);

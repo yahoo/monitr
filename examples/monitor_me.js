@@ -22,6 +22,8 @@ monitor.start();
 http.createServer(function (req, res) {
   res.writeHead(200, {'Content-Type': 'text/plain'});
   res.end('I am being monitored\n');
+  //send health info
+  process.monitor.setHealthStatus(false,0);
 }).listen(2000);
 
 /*
