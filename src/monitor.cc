@@ -61,7 +61,7 @@ void RegisterSignalHandler(int signal, void (*handler)(int)) {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handler;
     sigfillset(&sa.sa_mask);
-    sigaction(signal, &sa, NULL);        
+    sigaction(signal, &sa, NULL);
 }
 
 void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
