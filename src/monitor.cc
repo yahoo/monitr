@@ -28,6 +28,7 @@
 #include <fstream>
 #include <sys/time.h>
 #include <algorithm>
+#include <signal.h>
 
 #include <nan.h>
 
@@ -60,7 +61,17 @@ void RegisterSignalHandler(int signal, void (*handler)(int)) {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handler;
     sigfillset(&sa.sa_mask);
-    sigaction(signal, &sa, NULL);
+    sigaction(signal, &sa, NULL);        
+}
+
+void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = handler;
+    //The SA_SIGINFO flag tells sigaction() to use the sa_sigaction field, not sa_handler.
+    sa.sa_flags = SA_SIGINFO;
+    sigfillset(&sa.sa_mask);
+    sigaction(signal, &sa, NULL);        
 }
 
 // sleep by using select
@@ -607,11 +618,7 @@ void LogStackTrace(Handle<Object> obj) {
 }
 
 void LogPid(Handle<Object> obj) {
-    char pid_s[20];
-    pid_t pid = getpid();
-
-    snprintf(pid_s, sizeof(pid_s), "%d", pid);
-    cout << "Process " << pid_s << " received SIGHUP." << endl;
+    cout << "Process " << getpid() << " received SIGHUP." << endl;
 }
 
 void DebugEventHandler(DebugEvent event,
@@ -625,6 +632,27 @@ void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
    LogPid(event_details.GetExecutionState());
 }
 
+static string getProcessName(pid_t pid) {
+    char filepath[30];
+    snprintf(filepath, sizeof(filepath), "/proc/%d/cmdline", pid);
+
+    FILE *file = fopen(filepath, "r");
+    if (file == NULL) {
+        printf("FOPEN ERROR pid cmdline %s:\n", filepath);
+        return "";
+    }
+    string data;
+    char *arg = 0;
+    size_t size = 0;
+    while(getdelim(&arg, &size, 0, file) != -1) {
+        data.append(arg).append(" ");
+    }
+    if (data.length() > 0) data.erase(data.size() - 1); //get rid of last space
+    fclose(file);
+    return data;
+}
+
+
 static void SignalHangupHandler(int signal) {
 #if (NODE_MODULE_VERSION > 0x000B)
 // Node 0.11+
@@ -634,6 +662,13 @@ static void SignalHangupHandler(int signal) {
 #endif
     v8::Debug::DebugBreak();
 }
+
+static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* context){
+    cout << "Process " << getpid() << " received SIGHUP from Process (pid: "
+        << siginfo->si_pid << " uid: " << siginfo->si_uid << " name: '"
+        << getProcessName(siginfo->si_pid) << "')" << endl;
+}
+
 
 extern "C" void
 init(Handle<Object> target) {
@@ -647,7 +682,7 @@ init(Handle<Object> target) {
     target->Set(NanSymbol("stop"),
         FunctionTemplate::New(StopMonitor)->GetFunction());
 
-    RegisterSignalHandler(SIGHUP, SignalHangupHandler);
+    RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
 }
 
 NODE_MODULE(monitor, init)
