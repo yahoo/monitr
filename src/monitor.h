@@ -31,8 +31,11 @@
 #include <string>
 #include <vector>
 
+
+#include "nan.h"
+
 #define NODE_PROTECTED_PROPERTY(obj, name, getter, setter)                \
-  obj->SetAccessor(v8::String::NewSymbol(name), getter, setter,           \
+  obj->SetAccessor(NanNew(name), getter, setter,           \
                    v8::Handle<v8::Value>(), PROHIBITS_OVERWRITING,        \
                     DontDelete)
 

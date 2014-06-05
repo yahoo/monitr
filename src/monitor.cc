@@ -30,7 +30,6 @@
 #include <algorithm>
 #include <signal.h>
 
-#include <nan.h>
 
 #ifdef __APPLE__
     #include <sys/sysctl.h>
@@ -111,9 +110,16 @@ void* monitorNodeThread(void *arg) {
     exit(0);
 }
 
-void updateLoopTimeStamp(uv_async_t *watcher, int revents) {
+// Node 0.11+
+#if (NODE_MODULE_VERSION > 0x000B)
+void updateLoopTimeStamp(uv_async_t *watcher) {
     NodeMonitor::setStatistics();
 }
+#else
+void updateLoopTimeStamp(uv_async_t *watcher, int revents = 0) {
+    NodeMonitor::setStatistics();
+}
+#endif
 
 /*
  * NodeMonitor
@@ -148,7 +154,7 @@ void NodeMonitor::setStatistics() {
     // obtain memory ration
     v8::HeapStatistics v8stats;
 #if (NODE_MODULE_VERSION > 0x000B)
-    nan_isolate->GetHeapStatistics(&v8stats);
+    NanGetHeapStatistics(&v8stats);
 #else
     V8::GetHeapStatistics(&v8stats);
 #endif
@@ -339,7 +345,7 @@ void CpuUsageTracker::CalculateCpuUsage(CpuUsage* cur_usage,
 Local<Value> callFunction(const char* funcName) {
     NanEscapableScope();
     
-    Local<Value> pr = Context::GetCurrent()->Global()->Get(NanNew<String>("process"));
+    Local<Value> pr = NanGetCurrentContext()->Global()->Get(NanNew<String>("process"));
 
     if (pr->IsObject()) {
         Local<Value> exten = pr->ToObject()->Get(NanNew<String>("monitor"));
@@ -349,7 +355,7 @@ Local<Value> callFunction(const char* funcName) {
                 Local<Function> fn = Local<Function>::Cast(fval);
                 Local<Value> argv[1];
                 argv[0] = NanNew(NanNull());
-                return  NanEscapeScope(fn->Call(Context::GetCurrent()->Global(), 1, argv));
+                return  NanEscapeScope(fn->Call(NanGetCurrentContext()->Global(), 1, argv));
             }
         }
     }
@@ -596,7 +602,7 @@ void LogStackTrace(Handle<Object> obj) {
         
         int totalFrames = frameCountNum->Value();
         for(int i = 0; i < totalFrames; i++) {
-            Local<Value> frameNumber[] = {Number::New(i)};
+            Local<Value> frameNumber[] = {NanNew<Number>(i)};
             Local<Value> setSelectedFrame = obj->Get(NanNew<String>("setSelectedFrame"));
             Local<Function> setSelectedFrameFunc = Local<Function>::Cast(setSelectedFrame);
             setSelectedFrameFunc->Call(obj, 1, frameNumber);
@@ -675,12 +681,12 @@ init(Handle<Object> target) {
     NanScope();
 
     NODE_PROT_RO_PROPERTY(target, "ipcMonitorPath", GetterIPCMonitorPath);
-    target->Set(NanSymbol("setIpcMonitorPath"),
-        FunctionTemplate::New(SetterIPCMonitorPath)->GetFunction());
-    target->Set(NanSymbol("start"),
-        FunctionTemplate::New(StartMonitor)->GetFunction());
-    target->Set(NanSymbol("stop"),
-        FunctionTemplate::New(StopMonitor)->GetFunction());
+    target->Set(NanNew("setIpcMonitorPath"),
+        NanNew<FunctionTemplate>(SetterIPCMonitorPath)->GetFunction());
+    target->Set(NanNew("start"),
+        NanNew<FunctionTemplate>(StartMonitor)->GetFunction());
+    target->Set(NanNew("stop"),
+        NanNew<FunctionTemplate>(StopMonitor)->GetFunction());
 
     RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
 }
