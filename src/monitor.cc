@@ -49,19 +49,12 @@ using namespace v8;
 // This is the default IPC path where the stats are written to
 // Could use the setter method to change this
 static string _ipcMonitorPath = "/tmp/nodejs.mon";
+// default is to not show a backtrace when receiving a HUP
+static bool _show_backtrace = false;
 static const int MAX_INACTIAVITY_RETRIES = 5;
 static const int REPORT_INTERVAL_MS = 1000;
 
 namespace node {
-
-
-void RegisterSignalHandler(int signal, void (*handler)(int)) {
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = handler;
-    sigfillset(&sa.sa_mask);
-    sigaction(signal, &sa, NULL);
-}
 
 void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
     struct sigaction sa;
@@ -70,16 +63,17 @@ void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)
     //The SA_SIGINFO flag tells sigaction() to use the sa_sigaction field, not sa_handler.
     sa.sa_flags = SA_SIGINFO;
     sigfillset(&sa.sa_mask);
-    sigaction(signal, &sa, NULL);        
+    // We ignore any prior SIGHUP handler since we don't save it
+    sigaction(signal, &sa, NULL);
 }
 
 // sleep by using select
 static void doSleep(int ms) {
-struct timeval timeout;
+    struct timeval timeout;
 
-timeout.tv_sec = ms / 1000;
-timeout.tv_usec = (ms % 1000) * 1000;
-select(0, NULL, NULL, NULL, &timeout);
+    timeout.tv_sec = ms / 1000;
+    timeout.tv_usec = (ms % 1000) * 1000;
+    select(0, NULL, NULL, NULL, &timeout);
 }
 
 NodeMonitor* NodeMonitor::instance_ = NULL;
@@ -566,6 +560,16 @@ static NAN_GETTER(GetterIPCMonitorPath) {
     NanReturnValue(NanNew<String>(_ipcMonitorPath.c_str()));
 }
 
+static NAN_GETTER(GetterShowBackTrace) {
+    NanScope();
+    NanReturnValue(NanNew<Boolean>(_show_backtrace));
+}
+
+static NAN_SETTER(SetterShowBackTrace) {
+    NanScope();
+    _show_backtrace = value->BooleanValue();
+}
+
 static NAN_METHOD(SetterIPCMonitorPath) {
     NanScope();
     if (args.Length() < 1 ||
@@ -618,7 +622,7 @@ void LogStackTrace(Handle<Object> obj) {
             cout << *frameText << endl;
         }
     } catch(exception  e) {
-        cerr << "Error occured while logging stack trace:" << e.what() << endl;
+        cerr << "Error occurred while logging stack trace:" << e.what() << endl;
     }
     
 }
@@ -631,62 +635,64 @@ void DebugEventHandler(DebugEvent event,
        Handle<Object> exec_state,
        Handle<Object> event_data,
        Handle<Value> data) {
+
+    if (event != v8::Break) return;
+
     LogPid(exec_state);
+    if (_show_backtrace) LogStackTrace(exec_state);
 }
 
 void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
-   LogPid(event_details.GetExecutionState());
+
+    if (event_details.GetEvent() != v8::Break) return;
+
+    LogPid(event_details.GetExecutionState());
+    if (_show_backtrace) LogStackTrace(event_details.GetExecutionState());
 }
 
-static string getProcessName(pid_t pid) {
-    char filepath[30];
-    snprintf(filepath, sizeof(filepath), "/proc/%d/cmdline", pid);
-
-    FILE *file = fopen(filepath, "r");
-    if (file == NULL) {
-        printf("FOPEN ERROR pid cmdline %s:\n", filepath);
-        return "";
-    }
-    string data;
-    char *arg = 0;
-    size_t size = 0;
-    while(getdelim(&arg, &size, 0, file) != -1) {
-        data.append(arg).append(" ");
-    }
-    if (data.length() > 0) data.erase(data.size() - 1); //get rid of last space
-    fclose(file);
-    return data;
+static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* context) {
+    // We can call DebugBreak from outside the main v8 thread, and the v8 engine
+    // will try to make a debugger callback when it next checks a StackGuard
+    // (usually at entry/exit of functions that are being optimized)
+    v8::Debug::DebugBreak();
 }
 
 
-static void SignalHangupHandler(int signal) {
+#if defined(__GNUC__)
+#if __GNUC__ < 4
+// GCC-3.4.6 doesn't handle function template specialization according
+// to the partial ordering described by the C++ standard.  Therefore,
+// we have to fall back to using FunctionTemplate::New rather than
+// NanNew's template functionality :-(
+// This may just be an artifact of C++ compilers of that era not following
+//   http://www.open-std.org/jtc1/sc22/wg21/docs/cwg_defects.html#214
+#define MAKE_FUNCTION_TMPL(x, ...) FunctionTemplate::New(x, ##__VA_ARGS__)
+#else
+#define MAKE_FUNCTION_TMPL(x, ...) NanNew<FunctionTemplate>(x, ##__VA_ARGS__)
+#endif
+#endif
+
+extern "C" void
+init(Handle<Object> exports) {
+
+    NODE_PROT_RO_PROPERTY(exports, "ipcMonitorPath", GetterIPCMonitorPath);
+    NODE_PROTECTED_PROPERTY(exports, "backtrace", GetterShowBackTrace, SetterShowBackTrace);
+    exports->Set(NanNew("setIpcMonitorPath"),
+        MAKE_FUNCTION_TMPL(SetterIPCMonitorPath)->GetFunction());
+    exports->Set(NanNew("start"),
+        MAKE_FUNCTION_TMPL(StartMonitor)->GetFunction());
+    exports->Set(NanNew("stop"),
+        MAKE_FUNCTION_TMPL(StopMonitor)->GetFunction());
+
+// Always install our debugger event listener as soon as we're initialized.
+// We can't install it once we're running in a different thread if the main v8 
+// thread is busy or hung
 #if (NODE_MODULE_VERSION > 0x000B)
 // Node 0.11+
     v8::Debug::SetDebugEventListener2(DebugEventHandler2);
 #else
     v8::Debug::SetDebugEventListener(DebugEventHandler);
 #endif
-    v8::Debug::DebugBreak();
-}
-
-static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* context){
-    cout << "Process " << getpid() << " received SIGHUP from Process (pid: "
-        << siginfo->si_pid << " uid: " << siginfo->si_uid << " name: '"
-        << getProcessName(siginfo->si_pid) << "')" << endl;
-}
-
-
-extern "C" void
-init(Handle<Object> target) {
-    NanScope();
-
-    NODE_PROT_RO_PROPERTY(target, "ipcMonitorPath", GetterIPCMonitorPath);
-    target->Set(NanNew("setIpcMonitorPath"),
-        NanNew<FunctionTemplate>(SetterIPCMonitorPath)->GetFunction());
-    target->Set(NanNew("start"),
-        NanNew<FunctionTemplate>(StartMonitor)->GetFunction());
-    target->Set(NanNew("stop"),
-        NanNew<FunctionTemplate>(StopMonitor)->GetFunction());
 
     RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
 }

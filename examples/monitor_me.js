@@ -4,6 +4,7 @@
  * See the accompanying LICENSE file for terms.
  */
 var http = require('http'),
+    url = require('url'),
     monitor = require('..');
 
 /* 
@@ -16,12 +17,31 @@ var http = require('http'),
  */
 monitor.start();
 
+function fib(n) {
+  if (n<2)
+    return 1;
+  else
+    return fib(n-2) + fib(n-1);
+}
+
 /*
  * Start a simple http server
  */
 http.createServer(function (req, res) {
   res.writeHead(200, {'Content-Type': 'text/plain'});
-  res.end('I am being monitored\n');
+  var parsedUrl = url.parse(req.url, true);
+  if (parsedUrl.pathname == "/toggle-backtrace") {
+      monitor.backtrace = ! monitor.backtrace;
+      res.end('Toggling backtrace to ' + monitor.backtrace);
+  }
+  else if (parsedUrl.pathname == "/fib") {
+    var param = parsedUrl.query.n || 20;
+    var result = fib(param);
+    res.end('Finished calculating fibonacci(' + param + ') = ' + result );
+  }
+  else {
+    res.end('I am being monitored\n');
+  }
   //send health info
   process.monitor.setHealthStatus(false,0);
 }).listen(2000);
