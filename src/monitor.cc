@@ -55,7 +55,7 @@ static string _ipcMonitorPath = "/tmp/nodejs.mon";
 static bool _show_backtrace = true;
 static const int MAX_INACTIVITY_RETRIES = 5;
 // default is to show a backtrace when receiving a HUP
-static const int REPORT_INTERVAL_MS = 20000;
+static const int REPORT_INTERVAL_MS = 1000;
 
 /* globals used for signal catching, etc */
 static volatile sig_atomic_t hup_fired = 0;
