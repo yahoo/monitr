@@ -1,6 +1,8 @@
 # monitr
 
-Nodejs process monitoring tool. This module currently works only on LINUX.
+Nodejs process monitoring tool. 
+
+This module currently works only on Linux operating systems.
 This module spawns a thread and begins monitoring the process. 
 
 It looks up /proc/* files on the system to report CPU Usage.
@@ -67,16 +69,16 @@ Terminates the thread and closes the socket.
 ```js
 monitor.setIpcMonitorPath('/tmp/my-process-stats.mon');
 ```
-Sets the handle to write the stats to. If not specified, defaults to /tmp/nodejs.mon
+Sets the datagram socket name to write the stats. Defaults to /tmp/nodejs.mon
 
 # Health Status
-Monitr is now enhanced with custom health functionality wherein the app can report its own health.
-Following methods are added to process.monitor to set and get the health information.
+Monitr now supports custom health functionality whereby the app can report its own health.
+The following methods are added to process.monitor to set and get the health information.
 ```js
 setHealthStatus(isDown, statusCode)
 isDown()
 getStatusCode()
-getStatusTimestamp() - Return in seconds
+getStatusTimestamp() - Return seconds when setHealthStatus was last called
 getStatusDate() - Return Date object
 ```
 Once setHealthStatus is invoked, the status json, described above, will have following additional fields.
@@ -86,9 +88,20 @@ health_is_down: <app is down or up, boolean>,
 health_status_code: <health status code>
 ```
 
-# example
+# Handling HUP events
 
-Please refer to the examples/README.md for details
+`Monitr` installs a custom `SIGHUP` handler which will optionally print out a NodeJS stack backtrace.
+This can be useful for debugging where a NodeJS process may be _stuck_.
+
+You can control the printing of the backtrace with the boolean
+
+```js
+monitor.backtrace
+```
+
+# Example
+
+Please refer to the examples/README.md for examples showing the use of these functions.
 
 # Build Status
 

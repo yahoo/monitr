@@ -3,6 +3,7 @@
  * Copyrights licensed under the New BSD License.
  * See the accompanying LICENSE file for terms.
  */
+"use strict";
 var dgram = require('unix-dgram'),
     fs = require('fs'),
     util = require('util');
@@ -13,11 +14,29 @@ var dgram = require('unix-dgram'),
  * So that they read from the same socket
  */
 var monPath = "/tmp/nodejs.mon";
-monitorSocket = dgram.createSocket('unix_dgram');
+var monitorSocket = dgram.createSocket('unix_dgram');
+
+var last_signal_time = 0;
+function checkHungProcess(st) {
+    var MAX_INACTIVITY = 5;
+    if (st.elapsed > MAX_INACTIVITY * 1000 && (Date.now() - last_signal_time) > MAX_INACTIVITY * 1000) {
+	console.error("NodeJS process eventloop not processed for", MAX_INACTIVITY, "seconds.  Sending HUP");
+	try {
+	    process.kill(st.pid, 'SIGHUP');
+	    last_signal_time = Date.now();
+	} catch(e) {
+	    console.error("Couldn't send SIGHUP", e);
+	}
+    }
+}
+
+var stats = null;
 monitorSocket.on('message', function (msg, rinfo) {
     stats = JSON.parse(msg.toString());
     console.error('Process stats: ' + util.inspect(stats, true, null)); 
 });
+
+setInterval(function () { if (null != stats) checkHungProcess(stats.status) }, 1000);
 
 fs.unlink(monPath, function () {
     var  um = process.umask(0);

@@ -4,6 +4,8 @@
  * See the accompanying LICENSE file for terms.
  */
 
+#include <sys/syscall.h>
+
 #include <sys/types.h>
 #include <sys/select.h>
 #include <dirent.h>
@@ -46,40 +48,71 @@
 using namespace std;
 using namespace v8;
 
+
 // This is the default IPC path where the stats are written to
 // Could use the setter method to change this
 static string _ipcMonitorPath = "/tmp/nodejs.mon";
-static const int MAX_INACTIAVITY_RETRIES = 5;
+static bool _show_backtrace = true;
+static const int MAX_INACTIVITY_RETRIES = 5;
+// default is to show a backtrace when receiving a HUP
 static const int REPORT_INTERVAL_MS = 1000;
+
+/* globals used for signal catching, etc */
+static volatile sig_atomic_t hup_fired = 0;
+static siginfo_t savedSigInfo;
+static sigset_t savedBlockSet;
+static int sigpipefd_w = -1;
+static int sigpipefd_r = -1;
+
 
 namespace node {
 
-
-void RegisterSignalHandler(int signal, void (*handler)(int)) {
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = handler;
-    sigfillset(&sa.sa_mask);
-    sigaction(signal, &sa, NULL);
-}
-
 void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
+
+    sigset_t blockset;
+    sigemptyset(&blockset);  
+    sigaddset(&blockset, SIGHUP);
+    // block SIGHUP until we get to pselect() call to avoid race condition
+    // See http://lwn.net/Articles/176911/
+    sigprocmask(SIG_BLOCK, &blockset, &savedBlockSet);  
+
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = handler;
-    //The SA_SIGINFO flag tells sigaction() to use the sa_sigaction field, not sa_handler.
-    sa.sa_flags = SA_SIGINFO;
-    sigfillset(&sa.sa_mask);
-    sigaction(signal, &sa, NULL);        
+    sa.sa_flags = SA_SIGINFO; // Tell sigaction() to use the sa_sigaction field, not sa_handler.
+    sigemptyset(&sa.sa_mask); // Allow other signals to run during SIGHUP handler
+    if (sigaction(signal, &sa, NULL) < 0) {
+        perror("sigaction");
+    }
 }
 
 // sleep by using select
 static void doSleep(int ms) {
-struct timeval timeout;
+    int res;
+    struct timespec timeout;
 
-timeout.tv_sec = ms / 1000;
-timeout.tv_usec = (ms % 1000) * 1000;
-select(0, NULL, NULL, NULL, &timeout);
+    timeout.tv_sec = ms / 1000;
+    timeout.tv_nsec = (ms % 1000) * 1000 * 1000;
+
+    // put this thread to sleep until timeout, or a SIGHUP occurs
+    sigset_t blockset;
+    blockset = savedBlockSet;
+    // ensure we don't block SIGHUP in pselect in case signal delivered to this thread
+    sigdelset(&blockset, SIGHUP);
+
+    fd_set readfds;
+    FD_ZERO(&readfds );
+    FD_SET(sigpipefd_r, &readfds);
+
+    res = pselect(sigpipefd_r + 1, &readfds, NULL, NULL, &timeout, &blockset);
+
+    // Did we exit due to a "signal" sent via the pipe (likely from another thread)
+    if (FD_ISSET(sigpipefd_r, &readfds)) {
+        char c[100];
+        while ((read(sigpipefd_r, &c, sizeof(c))) == sizeof(c)) {
+            /* Flush the pipe! */
+        }
+    }
 }
 
 NodeMonitor* NodeMonitor::instance_ = NULL;
@@ -94,6 +127,16 @@ void* monitorNodeThread(void *arg) {
 
     doSleep(REPORT_INTERVAL_MS);
     while (true) {
+        if (hup_fired) {
+            // We can call DebugBreak from outside the main v8 thread, and the v8 engine
+            // will try to make a debugger callback when it next checks a StackGuard
+            // (usually at entry/exit of functions that are in the process of being optimized)
+            siginfo_t *siginfo = &savedSigInfo;
+            std::cout << "Process " << getpid() << " received SIGHUP from Process (pid: "
+                      << siginfo->si_pid << " uid: " << siginfo->si_uid << ")" << std::endl;
+            v8::Debug::DebugBreak();
+            hup_fired = 0;
+        }
         if (!errorCounter) {
             if (!NodeMonitor::sendReport()) {
             // slow down reporting if noone is listening
@@ -101,7 +144,7 @@ void* monitorNodeThread(void *arg) {
         }
         } else {
             ++errorCounter;
-            if (errorCounter >= MAX_INACTIAVITY_RETRIES) {
+            if (errorCounter >= MAX_INACTIVITY_RETRIES) {
                 errorCounter = 0;
             }
         }
@@ -137,6 +180,21 @@ void NodeMonitor::Initialize() {
     if (instance_->ipcSocket_ != -1) {
         fcntl(instance_->ipcSocket_, F_SETFD, FD_CLOEXEC);
     }
+
+    /* Use a pipe to let the signal handler (which may be in another thread) break out of pselect() */
+    {
+        int fd[2];
+        if (pipe(fd)) {
+            perror("Can't create pipe");
+        }
+        sigpipefd_r = fd[0]; 
+        sigpipefd_w = fd[1];
+        fcntl(sigpipefd_r, F_SETFL, fcntl(sigpipefd_r, F_GETFL) | O_NONBLOCK );
+        fcntl(sigpipefd_r, F_SETFD, FD_CLOEXEC );
+        fcntl(sigpipefd_w, F_SETFL, fcntl(sigpipefd_w, F_GETFL) | O_NONBLOCK );
+        fcntl(sigpipefd_w, F_SETFD, FD_CLOEXEC );
+    }
+
 
     uv_async_init(uv_default_loop(), &instance_->check_loop_, updateLoopTimeStamp);
     uv_unref((uv_handle_t*)&instance_->check_loop_);
@@ -566,6 +624,16 @@ static NAN_GETTER(GetterIPCMonitorPath) {
     NanReturnValue(NanNew<String>(_ipcMonitorPath.c_str()));
 }
 
+static NAN_GETTER(GetterShowBackTrace) {
+    NanScope();
+    NanReturnValue(NanNew<Boolean>(_show_backtrace));
+}
+
+static NAN_SETTER(SetterShowBackTrace) {
+    NanScope();
+    _show_backtrace = value->BooleanValue();
+}
+
 static NAN_METHOD(SetterIPCMonitorPath) {
     NanScope();
     if (args.Length() < 1 ||
@@ -618,75 +686,58 @@ void LogStackTrace(Handle<Object> obj) {
             cout << *frameText << endl;
         }
     } catch(exception  e) {
-        cerr << "Error occured while logging stack trace:" << e.what() << endl;
+        cerr << "Error occurred while logging stack trace:" << e.what() << endl;
     }
     
 }
 
-void LogPid(Handle<Object> obj) {
-    cout << "Process " << getpid() << " received SIGHUP." << endl;
-}
+#if (NODE_MODULE_VERSION > 0x000B)
+static void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
+    if (event_details.GetEvent() != v8::Break) return; // ignore other Debugger events from v8
 
-void DebugEventHandler(DebugEvent event,
+    if (_show_backtrace) LogStackTrace(event_details.GetExecutionState());
+}
+#else
+static void DebugEventHandler(DebugEvent event,
        Handle<Object> exec_state,
        Handle<Object> event_data,
        Handle<Value> data) {
-    LogPid(exec_state);
+
+    if (event != v8::Break) return;
+
+    if (_show_backtrace) LogStackTrace(exec_state);
 }
+#endif
 
-void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
-   LogPid(event_details.GetExecutionState());
-}
-
-static string getProcessName(pid_t pid) {
-    char filepath[30];
-    snprintf(filepath, sizeof(filepath), "/proc/%d/cmdline", pid);
-
-    FILE *file = fopen(filepath, "r");
-    if (file == NULL) {
-        printf("FOPEN ERROR pid cmdline %s:\n", filepath);
-        return "";
-    }
-    string data;
-    char *arg = 0;
-    size_t size = 0;
-    while(getdelim(&arg, &size, 0, file) != -1) {
-        data.append(arg).append(" ");
-    }
-    if (data.length() > 0) data.erase(data.size() - 1); //get rid of last space
-    fclose(file);
-    return data;
+static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* context) {
+    savedSigInfo = *siginfo;
+    hup_fired = 1;
+    char c = 0;
+    write(sigpipefd_w, &c, 1);  // signal via pipe fd to cause pselect() calling thread to break
 }
 
 
-static void SignalHangupHandler(int signal) {
+extern "C" void
+init(Handle<Object> exports) {
+
+    NODE_PROT_RO_PROPERTY(exports, "ipcMonitorPath", GetterIPCMonitorPath);
+    NODE_PROTECTED_PROPERTY(exports, "backtrace", GetterShowBackTrace, SetterShowBackTrace);
+    exports->Set(NanNew("setIpcMonitorPath"),
+                 NanNew<FunctionTemplate>(SetterIPCMonitorPath)->GetFunction());
+    exports->Set(NanNew("start"),
+                 NanNew<FunctionTemplate>(StartMonitor)->GetFunction());
+    exports->Set(NanNew("stop"),
+                 NanNew<FunctionTemplate>(StopMonitor)->GetFunction());
+
+// Always install our debugger event listener as soon as we're initialized.
+// We can't install it once we're running in a different thread if the main v8 
+// thread is busy or hung
 #if (NODE_MODULE_VERSION > 0x000B)
 // Node 0.11+
     v8::Debug::SetDebugEventListener2(DebugEventHandler2);
 #else
     v8::Debug::SetDebugEventListener(DebugEventHandler);
 #endif
-    v8::Debug::DebugBreak();
-}
-
-static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* context){
-    cout << "Process " << getpid() << " received SIGHUP from Process (pid: "
-        << siginfo->si_pid << " uid: " << siginfo->si_uid << " name: '"
-        << getProcessName(siginfo->si_pid) << "')" << endl;
-}
-
-
-extern "C" void
-init(Handle<Object> target) {
-    NanScope();
-
-    NODE_PROT_RO_PROPERTY(target, "ipcMonitorPath", GetterIPCMonitorPath);
-    target->Set(NanNew("setIpcMonitorPath"),
-        NanNew<FunctionTemplate>(SetterIPCMonitorPath)->GetFunction());
-    target->Set(NanNew("start"),
-        NanNew<FunctionTemplate>(StartMonitor)->GetFunction());
-    target->Set(NanNew("stop"),
-        NanNew<FunctionTemplate>(StopMonitor)->GetFunction());
 
     RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
 }
