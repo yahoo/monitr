@@ -107,10 +107,12 @@ static void doSleep(int ms) {
     res = pselect(sigpipefd_r + 1, &readfds, NULL, NULL, &timeout, &blockset);
 
     // Did we exit due to a "signal" sent via the pipe (likely from another thread)
-    if (res >= 0 && FD_ISSET(sigpipefd_r, &readfds)) {
-        char c[100];
-        while ((read(sigpipefd_r, &c, sizeof(c))) == sizeof(c)) {
-            /* Flush the pipe! */
+    if (res >= 0) {
+        if (FD_ISSET(sigpipefd_r, &readfds)) {
+            char c[100];
+            while ((read(sigpipefd_r, &c, sizeof(c))) == sizeof(c)) {
+              /* Flush the pipe! */
+            }
         }
     }
     else {
