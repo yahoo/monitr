@@ -47,7 +47,7 @@
            v8::FunctionTemplate::New(callback)->GetFunction(),            \
            static_cast<v8::PropertyAttribute>(v8::ReadOnly|v8::DontDelete))
 
-namespace node {
+namespace YNodeMonitor {
 
 typedef struct {
     int init;
