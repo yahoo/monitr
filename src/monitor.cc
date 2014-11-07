@@ -130,16 +130,16 @@ void LogStackTrace(Handle<Object> obj) {
         Local<Function> frameCountFunc = Local<Function>::Cast(frameCount);
         Local<Value> frameCountVal = frameCountFunc->Call(obj, 0, args);
         Local<Number> frameCountNum = frameCountVal->ToNumber();
-        
+
         cout << "Stack Trace:" << endl;
-        
+
         int totalFrames = frameCountNum->Value();
         for(int i = 0; i < totalFrames; i++) {
             Local<Value> frameNumber[] = {NanNew<Number>(i)};
             Local<Value> setSelectedFrame = obj->Get(NanNew<String>("setSelectedFrame"));
             Local<Function> setSelectedFrameFunc = Local<Function>::Cast(setSelectedFrame);
             setSelectedFrameFunc->Call(obj, 1, frameNumber);
-            
+
             Local<Value> frame = obj->Get(NanNew<String>("frame"));
             Local<Function> frameFunc = Local<Function>::Cast(frame);
             Local<Value> frameVal = frameFunc->Call(obj, 0, args);
@@ -150,10 +150,9 @@ void LogStackTrace(Handle<Object> obj) {
             String::Utf8Value frameText(frameToTextVal);
             cout << *frameText << endl;
         }
-    } catch(exception  e) {
+    } catch(exception&  e) {
         cerr << "Error occurred while logging stack trace:" << e.what() << endl;
     }
-    
 }
 
 #if (NODE_MODULE_VERSION > 0x000B)
@@ -163,7 +162,7 @@ static void ResetDebugEventListener() {
 }
 
 static void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
-    if (event_details.GetEvent() != v8::Break) return; 
+    if (event_details.GetEvent() != v8::Break) return;
     // ignore other Debugger events from v8
 
     if (_show_backtrace) LogStackTrace(event_details.GetExecutionState());
@@ -218,7 +217,7 @@ void* monitorNodeThread(void *arg) {
             // see https://groups.google.com/d/msg/v8-users/hRWWD_TRh_0/pLnrJF_QzzIJ
 
             // get current isolate from node's internals
-            v8::Isolate* isolate = node::node_isolate;
+            v8::Isolate* isolate = Isolate::GetCurrent();
             isolate->Enter();
             SetDebugEventListener();  // can only set DebugListener from inside v8 isolate
             isolate->Exit();
@@ -226,7 +225,7 @@ void* monitorNodeThread(void *arg) {
             // We can call DebugBreak from outside the main v8 thread, and the v8 engine
             // will try to make a debugger callback when it next checks a StackGuard
             // (usually at entry/exit of functions that are in the process of being optimized)
-            v8::Debug::DebugBreak();
+            v8::Debug::DebugBreak(isolate);
             hup_fired = 0;
         }
         if (!errorCounter) {

@@ -3,28 +3,36 @@
   "description": "Node process monitoring tool",
   "version": "0.0.11",
   "author": "Rohini Harendra <rohini.raghav@gmail.com>",
-  "os": [ "linux" ],
-  "cpu": [ "x64", "ia32" ],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "ia32"
+  ],
   "repository": {
-      "type": "git",
-      "url": "https://github.com/yahoo/monitr.git"
+    "type": "git",
+    "url": "https://github.com/yahoo/monitr.git"
   },
   "bugs": {
-      "url" : "http://github.com/yahoo/monitr/issues"
+    "url": "http://github.com/yahoo/monitr/issues"
   },
   "keywords": [
-    "node-monitoring", "node-status"
+    "node-monitoring",
+    "node-status"
   ],
-  "licenses":[
-        {
-            "type" : "BSD",
-            "url" : "https://github.com/yahoo/monitr/blob/master/LICENSE"
-        }
-    ],
-  "engines": { "node": ">=0.8" },
+  "licenses": [
+    {
+      "type": "BSD",
+      "url": "https://github.com/yahoo/monitr/blob/master/LICENSE"
+    }
+  ],
+  "engines": {
+    "node": ">=0.8"
+  },
   "dependencies": {
     "bindings": "*",
-    "nan":"*"
+    "nan": "*"
   },
   "devDependencies": {
     "unix-dgram": ">=0.0.4",
@@ -35,9 +43,8 @@
   },
   "main": "./lib/monitor.js",
   "scripts": {
-      "install": "node-gyp configure build",
-      "pretest": "jshint --config ./node_modules/yui-lint/jshint.json ./lib/",
-      "test": "istanbul cover --print both vows -- --spec ./tests/*.js"
+    "install": "node-gyp configure build",
+    "pretest": "jshint --config ./node_modules/yui-lint/jshint.json ./lib/",
+    "test": "istanbul cover --print both vows -- --spec ./tests/*.js"
   }
 }
-
