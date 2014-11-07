@@ -754,7 +754,10 @@ static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* cont
     savedSigInfo = *siginfo;
     hup_fired = 1;
     char c = 0;
-    write(sigpipefd_w, &c, 1);  // send sequentialized signal via pipe fd 
+    ssize_t rc = write(sigpipefd_w, &c, 1);  // send sequentialized signal via pipe fd 
+    if (rc < 0) {
+        perror("write");
+    } 
 }
 
 
