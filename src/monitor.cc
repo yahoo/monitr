@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Yahoo! Inc. All rights reserved.
+ * Copyright (c) 2014, Yahoo! Inc. All rights reserved.
  * Copyrights licensed under the New BSD License.
  * See the accompanying LICENSE file for terms.
  */
@@ -65,7 +65,10 @@ static int sigpipefd_w = -1;
 static int sigpipefd_r = -1;
 
 
-namespace node {
+namespace YNodeMonitor {
+
+// our singleton
+NodeMonitor* NodeMonitor::instance_ = NULL;
 
 void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
 
@@ -106,7 +109,7 @@ static void doSleep(int ms) {
 
     res = pselect(sigpipefd_r + 1, &readfds, NULL, NULL, &timeout, &blockset);
 
-    // Did we exit due to a "signal" sent via the pipe (likely from another thread)
+    // Did we break out due to a "signal" sent via the pipe (e.g. another thread)
     if (res >= 0) {
         if (FD_ISSET(sigpipefd_r, &readfds)) {
             char c[100];
@@ -120,7 +123,65 @@ static void doSleep(int ms) {
     }
 }
 
-NodeMonitor* NodeMonitor::instance_ = NULL;
+void LogStackTrace(Handle<Object> obj) {
+    try {
+        Local<Value> args[] = {};
+        Local<Value> frameCount = obj->Get(NanNew<String>("frameCount"));
+        Local<Function> frameCountFunc = Local<Function>::Cast(frameCount);
+        Local<Value> frameCountVal = frameCountFunc->Call(obj, 0, args);
+        Local<Number> frameCountNum = frameCountVal->ToNumber();
+
+        cout << "Stack Trace:" << endl;
+
+        int totalFrames = frameCountNum->Value();
+        for(int i = 0; i < totalFrames; i++) {
+            Local<Value> frameNumber[] = {NanNew<Number>(i)};
+            Local<Value> setSelectedFrame = obj->Get(NanNew<String>("setSelectedFrame"));
+            Local<Function> setSelectedFrameFunc = Local<Function>::Cast(setSelectedFrame);
+            setSelectedFrameFunc->Call(obj, 1, frameNumber);
+
+            Local<Value> frame = obj->Get(NanNew<String>("frame"));
+            Local<Function> frameFunc = Local<Function>::Cast(frame);
+            Local<Value> frameVal = frameFunc->Call(obj, 0, args);
+            Local<Object> frameObj = frameVal->ToObject();
+            Local<Value> frameToText = frameObj->Get(NanNew<String>("toText"));
+            Local<Function> frameToTextFunc = Local<Function>::Cast(frameToText);
+            Local<Value> frameToTextVal = frameToTextFunc->Call(frameObj, 0, args);
+            String::Utf8Value frameText(frameToTextVal);
+            cout << *frameText << endl;
+        }
+    } catch(exception&  e) {
+        cerr << "Error occurred while logging stack trace:" << e.what() << endl;
+    }
+}
+
+#if (NODE_MODULE_VERSION > 0x000B)
+// Node 0.11
+static void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
+
+    if (event_details.GetEvent() != v8::Break) return;
+
+    if (_show_backtrace) LogStackTrace(event_details.GetExecutionState());
+
+    // reset event listener so we don't hurt subsequent performance
+    v8::Debug::SetDebugEventListener2(NULL);
+}
+#else
+// Node 0.10
+static void DebugEventHandler(DebugEvent event,
+       Handle<Object> exec_state,
+       Handle<Object> event_data,
+       Handle<Value> data) {
+
+    if (event != v8::Break) return;
+
+    if (_show_backtrace) LogStackTrace(exec_state);
+
+    // reset event listener so we don't hurt subsequent performance
+    v8::Debug::SetDebugEventListener(NULL);
+}
+#endif
+
 
 /*
  * Thread which reports the
@@ -133,13 +194,31 @@ void* monitorNodeThread(void *arg) {
     doSleep(REPORT_INTERVAL_MS);
     while (true) {
         if (hup_fired) {
-            // We can call DebugBreak from outside the main v8 thread, and the v8 engine
-            // will try to make a debugger callback when it next checks a StackGuard
-            // (usually at entry/exit of functions that are in the process of being optimized)
+
             siginfo_t *siginfo = &savedSigInfo;
             std::cout << "Process " << getpid() << " received SIGHUP from Process (pid: "
                       << siginfo->si_pid << " uid: " << siginfo->si_uid << ")" << std::endl;
-            v8::Debug::DebugBreak();
+
+            // Install debugger event listener once we receive a hup, so subsequent
+            // DebugBreak will trigger our code with stacktrace argument
+            // see https://groups.google.com/d/msg/v8-users/hRWWD_TRh_0/pLnrJF_QzzIJ
+
+            // get current isolate from node's internals
+            v8::Isolate* isolate = Isolate::GetCurrent();
+            isolate->Enter();
+            // can only set DebugListener from inside v8 isolate
+// Node 0.11+
+#if (NODE_MODULE_VERSION > 0x000B)
+            v8::Debug::SetDebugEventListener2(DebugEventHandler2);
+#else
+            v8::Debug::SetDebugEventListener(DebugEventHandler);
+#endif
+            isolate->Exit();
+
+            // We can call DebugBreak from outside the main v8 thread, and the v8 engine
+            // will try to make a debugger callback when it next checks a StackGuard
+            // (usually at entry/exit of functions that are in the process of being optimized)
+            v8::Debug::DebugBreak(isolate);
             hup_fired = 0;
         }
         if (!errorCounter) {
@@ -663,62 +742,15 @@ static NAN_METHOD(StopMonitor) {
 }
 
 
-void LogStackTrace(Handle<Object> obj) {
-    try {
-        Local<Value> args[] = {};
-        Local<Value> frameCount = obj->Get(NanNew<String>("frameCount"));
-        Local<Function> frameCountFunc = Local<Function>::Cast(frameCount);
-        Local<Value> frameCountVal = frameCountFunc->Call(obj, 0, args);
-        Local<Number> frameCountNum = frameCountVal->ToNumber();
-        
-        cout << "Stack Trace:" << endl;
-        
-        int totalFrames = frameCountNum->Value();
-        for(int i = 0; i < totalFrames; i++) {
-            Local<Value> frameNumber[] = {NanNew<Number>(i)};
-            Local<Value> setSelectedFrame = obj->Get(NanNew<String>("setSelectedFrame"));
-            Local<Function> setSelectedFrameFunc = Local<Function>::Cast(setSelectedFrame);
-            setSelectedFrameFunc->Call(obj, 1, frameNumber);
-            
-            Local<Value> frame = obj->Get(NanNew<String>("frame"));
-            Local<Function> frameFunc = Local<Function>::Cast(frame);
-            Local<Value> frameVal = frameFunc->Call(obj, 0, args);
-            Local<Object> frameObj = frameVal->ToObject();
-            Local<Value> frameToText = frameObj->Get(NanNew<String>("toText"));
-            Local<Function> frameToTextFunc = Local<Function>::Cast(frameToText);
-            Local<Value> frameToTextVal = frameToTextFunc->Call(frameObj, 0, args);
-            String::Utf8Value frameText(frameToTextVal);
-            cout << *frameText << endl;
-        }
-    } catch(exception  e) {
-        cerr << "Error occurred while logging stack trace:" << e.what() << endl;
-    }
-    
-}
-
-#if (NODE_MODULE_VERSION > 0x000B)
-static void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
-    if (event_details.GetEvent() != v8::Break) return; // ignore other Debugger events from v8
-
-    if (_show_backtrace) LogStackTrace(event_details.GetExecutionState());
-}
-#else
-static void DebugEventHandler(DebugEvent event,
-       Handle<Object> exec_state,
-       Handle<Object> event_data,
-       Handle<Value> data) {
-
-    if (event != v8::Break) return;
-
-    if (_show_backtrace) LogStackTrace(exec_state);
-}
-#endif
 
 static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* context) {
     savedSigInfo = *siginfo;
     hup_fired = 1;
     char c = 0;
-    write(sigpipefd_w, &c, 1);  // signal via pipe fd to cause pselect() calling thread to break
+    ssize_t rc = write(sigpipefd_w, &c, 1);  // send sequentialized signal via pipe fd 
+    if (rc < 0) {
+        perror("write");
+    } 
 }
 
 
@@ -733,16 +765,6 @@ init(Handle<Object> exports) {
                  NanNew<FunctionTemplate>(StartMonitor)->GetFunction());
     exports->Set(NanNew("stop"),
                  NanNew<FunctionTemplate>(StopMonitor)->GetFunction());
-
-// Always install our debugger event listener as soon as we're initialized.
-// We can't install it once we're running in a different thread if the main v8 
-// thread is busy or hung
-#if (NODE_MODULE_VERSION > 0x000B)
-// Node 0.11+
-    v8::Debug::SetDebugEventListener2(DebugEventHandler2);
-#else
-    v8::Debug::SetDebugEventListener(DebugEventHandler);
-#endif
 
     RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
 }
