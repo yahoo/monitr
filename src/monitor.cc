@@ -156,28 +156,18 @@ void LogStackTrace(Handle<Object> obj) {
 }
 
 #if (NODE_MODULE_VERSION > 0x000B)
-// Node 0.11+
-static void ResetDebugEventListener() {
-    v8::Debug::SetDebugEventListener2(NULL);
-}
-
+// Node 0.11
 static void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
+
     if (event_details.GetEvent() != v8::Break) return;
-    // ignore other Debugger events from v8
 
     if (_show_backtrace) LogStackTrace(event_details.GetExecutionState());
 
-    ResetDebugEventListener();
-}
-static void SetDebugEventListener() {
-    v8::Debug::SetDebugEventListener2(DebugEventHandler2);
+    // reset event listener so we don't hurt subsequent performance
+    v8::Debug::SetDebugEventListener2(NULL);
 }
 #else
 // Node 0.10
-static void ResetDebugEventListener() {
-    v8::Debug::SetDebugEventListener(NULL);
-}
-
 static void DebugEventHandler(DebugEvent event,
        Handle<Object> exec_state,
        Handle<Object> event_data,
@@ -187,11 +177,8 @@ static void DebugEventHandler(DebugEvent event,
 
     if (_show_backtrace) LogStackTrace(exec_state);
 
-    ResetDebugEventListener();
-}
-
-static void SetDebugEventListener() {
-    v8::Debug::SetDebugEventListener(DebugEventHandler);
+    // reset event listener so we don't hurt subsequent performance
+    v8::Debug::SetDebugEventListener(NULL);
 }
 #endif
 
@@ -219,7 +206,13 @@ void* monitorNodeThread(void *arg) {
             // get current isolate from node's internals
             v8::Isolate* isolate = Isolate::GetCurrent();
             isolate->Enter();
-            SetDebugEventListener();  // can only set DebugListener from inside v8 isolate
+            // can only set DebugListener from inside v8 isolate
+// Node 0.11+
+#if (NODE_MODULE_VERSION > 0x000B)
+            v8::Debug::SetDebugEventListener2(DebugEventHandler2);
+#else
+            v8::Debug::SetDebugEventListener(DebugEventHandler);
+#endif
             isolate->Exit();
 
             // We can call DebugBreak from outside the main v8 thread, and the v8 engine
