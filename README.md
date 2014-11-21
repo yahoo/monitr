@@ -90,14 +90,25 @@ health_status_code: <health status code>
 
 # Handling HUP events
 
-`Monitr` installs a custom `SIGHUP` handler which will optionally print out a NodeJS stack backtrace.
-This can be useful for debugging where a NodeJS process may be _stuck_.
+`Monitr` installs a custom `SIGHUP` handler which will optionally
+print out a NodeJS stack backtrace of the Javascript currently being
+executed.  This can be useful for debugging where a NodeJS process may
+be _stuck_.
 
-You can control the printing of the backtrace with the boolean
+Due to the method by which the stack backtrace is
+obtained (installing a v8 Javascript engine debug event listener and
+simulating a debugger event), there _is_ a performance slowdown for
+code running while the stack backtrace option is active.
+
+By default the backtrace option is not enabled.  You can enable it
+setting the `showBacktrace` property to true, e.g.
 
 ```js
-monitor.backtrace
+monitor.showBacktrace = true
 ```
+
+Setting `monitor.showBacktrace` to `false` will restore the original
+performance by removing the debug event listener.
 
 # Example
 

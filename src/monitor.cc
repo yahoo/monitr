@@ -8,6 +8,7 @@
 
 #include <sys/types.h>
 #include <sys/select.h>
+#include <sys/prctl.h>  // to set thread name
 #include <dirent.h>
 #include <math.h>
 #include <node.h>
@@ -52,7 +53,7 @@ using namespace v8;
 // This is the default IPC path where the stats are written to
 // Could use the setter method to change this
 static string _ipcMonitorPath = "/tmp/nodejs.mon";
-static bool _show_backtrace = true;
+static bool _show_backtrace = false;  //< default to false to avoid performance
 static const int MAX_INACTIVITY_RETRIES = 5;
 // default is to show a backtrace when receiving a HUP
 static const int REPORT_INTERVAL_MS = 1000;
@@ -65,9 +66,13 @@ static int sigpipefd_w = -1;
 static int sigpipefd_r = -1;
 
 
-namespace node {
+namespace ynode {
 
-void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
+// our singleton instance
+NodeMonitor* NodeMonitor::instance_ = NULL;
+
+
+    void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
 
     sigset_t blockset;
     sigemptyset(&blockset);  
@@ -86,7 +91,9 @@ void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)
     }
 }
 
-// sleep by using select
+/** Sleep waiting for some event on our pipe from the signal handler
+ *  \param ms max number of milliseconds to wait
+ **/
 static void doSleep(int ms) {
     int res;
     struct timespec timeout;
@@ -120,8 +127,6 @@ static void doSleep(int ms) {
     }
 }
 
-NodeMonitor* NodeMonitor::instance_ = NULL;
-
 /*
  * Thread which reports the
  * status of the current process to the watcher
@@ -133,13 +138,24 @@ void* monitorNodeThread(void *arg) {
     doSleep(REPORT_INTERVAL_MS);
     while (true) {
         if (hup_fired) {
-            // We can call DebugBreak from outside the main v8 thread, and the v8 engine
-            // will try to make a debugger callback when it next checks a StackGuard
-            // (usually at entry/exit of functions that are in the process of being optimized)
             siginfo_t *siginfo = &savedSigInfo;
             std::cout << "Process " << getpid() << " received SIGHUP from Process (pid: "
                       << siginfo->si_pid << " uid: " << siginfo->si_uid << ")" << std::endl;
-            v8::Debug::DebugBreak();
+
+            // We are calling DebugBreak from our monitor thread, which
+            // is running independently of the main v8 thread.
+            // Calling DebugBreak() from outside the thread is allowed, but
+            // setting a DebugEventListener() is *not*.
+            // v8 will try to make a debugger event callback when the next
+            // StackGuard check occurs (i.e. start/end functions, back loops)
+
+            if (_show_backtrace) {
+                // Only attempt to call DebugBreak() if we have the
+                // DebugEventHandler installed, since otherwise v8
+                // will *never* clear the DEBUGBREAK flag in the
+                // StackGuard thread_local inside v8
+                v8::Debug::DebugBreak(NodeMonitor::getIsolate());
+            }
             hup_fired = 0;
         }
         if (!errorCounter) {
@@ -173,20 +189,25 @@ void updateLoopTimeStamp(uv_async_t *watcher, int revents = 0) {
  * NodeMonitor
  * Spawns a thread to monitor stats every REPORT_INTERVAL_MS
  */
-void NodeMonitor::Initialize() {
+void NodeMonitor::Initialize(v8::Isolate* isolate) {
 
     // only one instance is allowed per process
+    // \todo change this to be one per *isolate*
     if (instance_) {
         return;
     }
-    instance_ = new NodeMonitor();
+    assert(0 != isolate);
+    instance_ = new NodeMonitor(isolate);
 
     instance_->ipcSocket_ = socket(PF_UNIX, SOCK_DGRAM, 0);
     if (instance_->ipcSocket_ != -1) {
         fcntl(instance_->ipcSocket_, F_SETFD, FD_CLOEXEC);
     }
 
-    /* Use a pipe to let the signal handler (which may be in another thread) break out of pselect() */
+    /* Use a pipe to let the signal handler (which will likely be 
+       executed in another thread) break out of pselect().
+       This is the standard DJ Bernstein pipe for handling signals
+       in multi-thread programs technique */
     {
         int fd[2];
         if (pipe(fd)) {
@@ -201,11 +222,21 @@ void NodeMonitor::Initialize() {
     }
 
 
+    // Set it up such that libuv will execute our callback function
+    // (updateLoopTimeStamp) each time through the default uv event loop
     uv_async_init(uv_default_loop(), &instance_->check_loop_, updateLoopTimeStamp);
     uv_unref((uv_handle_t*)&instance_->check_loop_);
 
     ipcInitialization();
-    pthread_create(&instance_->tmonitor_, NULL, monitorNodeThread, NULL);
+    {
+        int rc;
+        rc = pthread_create(&instance_->tmonitor_, NULL, monitorNodeThread, NULL);
+        if (0 != rc) perror("pthread_create");
+
+        // set the thread name so it's easy to distinguish when debugging
+        rc = pthread_setname_np(instance_->tmonitor_, "monitr");
+        if (0 != rc) perror("pthread_setname_np");
+    }
 }
 
 void NodeMonitor::setStatistics() {
@@ -292,6 +323,16 @@ void NodeMonitor::ipcInitialization() {
     instance_->msg_.msg_name = &instance_->ipcAddr_;
     instance_->msg_.msg_namelen = instance_->ipcAddrLen_;
     instance_->msg_.msg_iovlen = 1;
+}
+
+/** Returns isolate which this NodeMonitor object is monitoring
+ *
+ *  Do not call unless NodeMonitor::Initialize() has already been called
+ *
+ **/
+v8::Isolate* NodeMonitor::getIsolate() {
+    assert( 0 != instance_ );
+    return instance_->isolate_;
 }
 
 CpuUsageTracker::CpuUsageTracker() {
@@ -608,9 +649,10 @@ void NodeMonitor::Stop() {
 NodeMonitor::~NodeMonitor() {
 }
 
-NodeMonitor::NodeMonitor() :
+NodeMonitor::NodeMonitor(v8::Isolate* isolate) :
     startTime(0),
     tmonitor_((pthread_t) NULL),
+    isolate_(isolate),
     loop_count_(0),
     last_loop_count_(0),
     consumption_(0.0),
@@ -624,45 +666,8 @@ NodeMonitor::NodeMonitor() :
     memset(&ipcAddr_, 0,sizeof(struct sockaddr_un));
 }
 
-static NAN_GETTER(GetterIPCMonitorPath) {
-    NanScope();
-    NanReturnValue(NanNew<String>(_ipcMonitorPath.c_str()));
-}
 
-static NAN_GETTER(GetterShowBackTrace) {
-    NanScope();
-    NanReturnValue(NanNew<Boolean>(_show_backtrace));
-}
-
-static NAN_SETTER(SetterShowBackTrace) {
-    NanScope();
-    _show_backtrace = value->BooleanValue();
-}
-
-static NAN_METHOD(SetterIPCMonitorPath) {
-    NanScope();
-    if (args.Length() < 1 ||
-        (!args[0]->IsString() && !args[0]->IsUndefined() && !args[0]->IsNull())) {
-        THROW_BAD_ARGS();
-    }
-    String::Utf8Value ipcMonitorPath(args[0]);
-    _ipcMonitorPath = *ipcMonitorPath;
-    NanReturnValue(NanUndefined());
-}
-
-static NAN_METHOD(StartMonitor) {
-    NanScope();
-    NodeMonitor::Initialize();
-    NanReturnValue(NanUndefined());
-}
-
-static NAN_METHOD(StopMonitor) {
-    NanScope();
-    NodeMonitor::Stop();
-    NanReturnValue(NanUndefined());
-}
-
-
+    
 void LogStackTrace(Handle<Object> obj) {
     try {
         Local<Value> args[] = {};
@@ -714,11 +719,87 @@ static void DebugEventHandler(DebugEvent event,
 }
 #endif
 
+    
+/** Will install/uninstall DebugEventListeners 
+ * \param install true => install, false => uninstall
+ *
+ * Since this ends up making isolate-modifying calls to v8
+ * it may be executed only from within the thread
+ * that is executing the main v8 isolate.  In other words
+ * it is *not* thread-safe/signal-safe.
+ **/
+static void InstallDebugEventListeners(bool install) {
+    if (install) {
+#if (NODE_MODULE_VERSION > 0x000B)
+// Node 0.11+
+        v8::Debug::SetDebugEventListener2(DebugEventHandler2);
+#else
+        v8::Debug::SetDebugEventListener(DebugEventHandler);
+#endif
+    }
+    else {
+#if (NODE_MODULE_VERSION > 0x000B)
+// Node 0.11+
+        v8::Debug::SetDebugEventListener2(NULL);
+#else
+        v8::Debug::SetDebugEventListener(NULL);
+#endif
+    }
+}
+    
+
+static NAN_GETTER(GetterIPCMonitorPath) {
+    NanScope();
+    NanReturnValue(NanNew<String>(_ipcMonitorPath.c_str()));
+}
+
+static NAN_GETTER(GetterShowBackTrace) {
+    NanScope();
+    NanReturnValue(NanNew<Boolean>(_show_backtrace));
+}
+
+static NAN_SETTER(SetterShowBackTrace) {
+    NanScope();
+    bool newSetting = value->BooleanValue();
+    if (newSetting != _show_backtrace) {
+        _show_backtrace = newSetting;
+        InstallDebugEventListeners(_show_backtrace);
+    }
+}
+
+static NAN_METHOD(SetterIPCMonitorPath) {
+    NanScope();
+    if (args.Length() < 1 ||
+        (!args[0]->IsString() && !args[0]->IsUndefined() && !args[0]->IsNull())) {
+        THROW_BAD_ARGS();
+    }
+    String::Utf8Value ipcMonitorPath(args[0]);
+    _ipcMonitorPath = *ipcMonitorPath;
+    NanReturnValue(NanUndefined());
+}
+
+static NAN_METHOD(StartMonitor) {
+    NanScope();
+    NodeMonitor::Initialize(v8::Isolate::GetCurrent());
+    NanReturnValue(NanUndefined());
+}
+
+static NAN_METHOD(StopMonitor) {
+    NanScope();
+    NodeMonitor::Stop();
+    NanReturnValue(NanUndefined());
+}
+
+
 static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* context) {
     savedSigInfo = *siginfo;
     hup_fired = 1;
     char c = 0;
-    write(sigpipefd_w, &c, 1);  // signal via pipe fd to cause pselect() calling thread to break
+
+    ssize_t rc = write(sigpipefd_w, &c, 1);  // send sequentialized signal
+    if (rc < 0) {
+        perror("write");
+    }
 }
 
 
@@ -726,7 +807,7 @@ extern "C" void
 init(Handle<Object> exports) {
 
     NODE_PROT_RO_PROPERTY(exports, "ipcMonitorPath", GetterIPCMonitorPath);
-    NODE_PROTECTED_PROPERTY(exports, "backtrace", GetterShowBackTrace, SetterShowBackTrace);
+    NODE_PROTECTED_PROPERTY(exports, "showBacktrace", GetterShowBackTrace, SetterShowBackTrace);
     exports->Set(NanNew("setIpcMonitorPath"),
                  NanNew<FunctionTemplate>(SetterIPCMonitorPath)->GetFunction());
     exports->Set(NanNew("start"),
@@ -734,17 +815,8 @@ init(Handle<Object> exports) {
     exports->Set(NanNew("stop"),
                  NanNew<FunctionTemplate>(StopMonitor)->GetFunction());
 
-// Always install our debugger event listener as soon as we're initialized.
-// We can't install it once we're running in a different thread if the main v8 
-// thread is busy or hung
-#if (NODE_MODULE_VERSION > 0x000B)
-// Node 0.11+
-    v8::Debug::SetDebugEventListener2(DebugEventHandler2);
-#else
-    v8::Debug::SetDebugEventListener(DebugEventHandler);
-#endif
-
     RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
+    
 }
 
 NODE_MODULE(monitor, init)
