@@ -71,8 +71,7 @@ namespace ynode {
 // our singleton instance
 NodeMonitor* NodeMonitor::instance_ = NULL;
 
-
-    void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
+void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
 
     sigset_t blockset;
     sigemptyset(&blockset);  
@@ -667,7 +666,6 @@ NodeMonitor::NodeMonitor(v8::Isolate* isolate) :
 }
 
 
-    
 void LogStackTrace(Handle<Object> obj) {
     try {
         Local<Value> args[] = {};

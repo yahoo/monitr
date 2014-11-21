@@ -140,8 +140,6 @@ class NodeMonitor {
   static bool sendReport();
   static void setStatistics();
   
-  //  static void shutdown();
-
   static v8::Isolate* getIsolate();
  private:
   time_t startTime;
