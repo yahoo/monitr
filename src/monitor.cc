@@ -813,6 +813,7 @@ init(Handle<Object> exports) {
     exports->Set(NanNew("stop"),
                  NanNew<FunctionTemplate>(StopMonitor)->GetFunction());
 
+    InstallDebugEventListeners(_show_backtrace);
     RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
     
 }
