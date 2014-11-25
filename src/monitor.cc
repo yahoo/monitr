@@ -206,7 +206,7 @@ void NodeMonitor::Initialize(v8::Isolate* isolate) {
     /* Use a pipe to let the signal handler (which will likely be 
        executed in another thread) break out of pselect().
        This is the standard DJ Bernstein pipe for handling signals
-       in multi-thread programs technique */
+       in multi-thread programs technique - http://cr.yp.to/docs/selfpipe.html */
     {
         int fd[2];
         if (pipe(fd)) {
@@ -794,7 +794,10 @@ static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* cont
     hup_fired = 1;
     char c = 0;
 
-    ssize_t rc = write(sigpipefd_w, &c, 1);  // send sequentialized signal
+    // enforce serial write via signal pipe
+    // This will be handled by the monitor thread which is running a pselect() to
+    // listen to any events on the other end of this pipe file descriptor pair.
+    ssize_t rc = write(sigpipefd_w, &c, 1);  
     if (rc < 0) {
         perror("write");
     }
