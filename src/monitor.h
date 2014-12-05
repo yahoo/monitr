@@ -47,7 +47,7 @@
            v8::FunctionTemplate::New(callback)->GetFunction(),            \
            static_cast<v8::PropertyAttribute>(v8::ReadOnly|v8::DontDelete))
 
-namespace node {
+namespace ynode {
 
 typedef struct {
     int init;
@@ -123,9 +123,16 @@ private:
 };
 
 
+/** Singleton class that collects and sends stats about running isolate
+ *
+ * \todo This should be extended into a non-singleton
+ * class that can be allocated one per v8 isolate, but for the
+ * moment, it assumes there is only one running in the whole process
+ * (currently true for default v8).
+ **/
 class NodeMonitor {
  public:
-  static void Initialize();
+  static void Initialize(v8::Isolate* isolate);
   static void Stop();
   virtual ~NodeMonitor();
   
@@ -133,8 +140,7 @@ class NodeMonitor {
   static bool sendReport();
   static void setStatistics();
   
-  static void shutdown();
-  
+  static v8::Isolate* getIsolate();
  private:
   time_t startTime;
   
@@ -146,7 +152,8 @@ class NodeMonitor {
   CpuUsageTracker cpuTrackerSync_;
   Statistics stats_;
   
-  pthread_t tmonitor_;
+  pthread_t tmonitor_;    //< the pthread doing the monitoring
+  v8::Isolate* isolate_;  //< the isolate this monitor is monitoring
   
   uv_async_t check_loop_;
   
@@ -160,10 +167,11 @@ class NodeMonitor {
   struct sockaddr_un ipcAddr_;
   socklen_t ipcAddrLen_;
   struct msghdr msg_;
-  static NodeMonitor* instance_;
   int ipcSocket_;
   
-  NodeMonitor();
+  static NodeMonitor* instance_;  //< the singleton instance
+
+  NodeMonitor(v8::Isolate* isolate);
   static int getIntFunction(const char* funcName);
   static bool getBooleanFunction(const char* funcName);
 };

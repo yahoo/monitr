@@ -31,13 +31,16 @@ http.createServer(function (req, res) {
   res.writeHead(200, {'Content-Type': 'text/plain'});
   var parsedUrl = url.parse(req.url, true);
   if (parsedUrl.pathname == "/toggle-backtrace") {
-      monitor.backtrace = ! monitor.backtrace;
-      res.end('Toggling backtrace to ' + monitor.backtrace + '\n');
+      monitor.showBacktrace = ! monitor.showBacktrace;
+      res.end('Toggling backtrace to ' + monitor.showBacktrace + '\n');
   }
   else if (parsedUrl.pathname == "/fib") {
     var param = parsedUrl.query.n || 20;
+    var startTime = new Date().getTime();
     var result = fib(param);
-    res.end('Finished calculating fibonacci(' + param + ') = ' + result + '\n');
+    var endTime = new Date().getTime();
+    res.end('Finished calculating fibonacci(' + param + ') = ' + result 
+            + ' in ' + (endTime-startTime) + 'ms\n');
   }
   else {
     res.end('I am being monitored\n');
