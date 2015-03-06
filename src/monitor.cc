@@ -728,16 +728,18 @@ static void DebugEventHandler(DebugEvent event,
  **/
 static void InstallDebugEventListeners(bool install) {
     if (install) {
-#if (NODE_MODULE_VERSION > 0x000B)
-// Node 0.11+
+#if (NODE_MAJOR_VERSION > 0 || NODE_MINOR_VERSION >= 12 || (NODE_MINOR_VERSION >= 11 && NODE_PATCH_VERSION >= 15))
+        v8::Debug::SetDebugEventListener(DebugEventHandler2);
+#elif (NODE_MINOR_VERSION >= 11)
         v8::Debug::SetDebugEventListener2(DebugEventHandler2);
 #else
         v8::Debug::SetDebugEventListener(DebugEventHandler);
 #endif
     }
     else {
-#if (NODE_MODULE_VERSION > 0x000B)
-// Node 0.11+
+#if (NODE_MAJOR_VERSION > 0 || NODE_MINOR_VERSION >= 12 || (NODE_MINOR_VERSION >= 11 && NODE_PATCH_VERSION >= 15))
+        v8::Debug::SetDebugEventListener(NULL);
+#elif (NODE_MINOR_VERSION >= 11)
         v8::Debug::SetDebugEventListener2(NULL);
 #else
         v8::Debug::SetDebugEventListener(NULL);
