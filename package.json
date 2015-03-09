@@ -1,7 +1,7 @@
 {
   "name": "monitr",
   "description": "Node process monitoring tool",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "author": "Rohini Harendra <rohini.raghav@gmail.com>",
   "os": [ "linux" ],
   "cpu": [ "x64", "ia32" ],
@@ -21,7 +21,7 @@
             "url" : "https://github.com/yahoo/monitr/blob/master/LICENSE"
         }
     ],
-  "engines": { "node": ">=0.8" },
+  "engines": { "node": ">=0.10" },
   "dependencies": {
     "bindings": "*",
     "nan":"*"
