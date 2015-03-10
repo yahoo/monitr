@@ -36,7 +36,7 @@ Here is the list of data the module reports periodically:
  }
 ```
 
-This package is tested only with Node versions 8 and 10.
+This package is tested only with Node versions 10 and 12.
 
 
 # install
