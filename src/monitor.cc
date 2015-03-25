@@ -134,6 +134,10 @@ static void doSleep(int ms) {
 void* monitorNodeThread(void *arg) {
     int errorCounter = 0;
 
+    // set the thread name so it's easy to distinguish when debugging
+    int rc = pthread_setname_np(pthread_self(), "monitr");
+    if (0 != rc) perror("pthread_setname_np");
+
     doSleep(REPORT_INTERVAL_MS);
     while (true) {
         if (hup_fired) {
@@ -231,10 +235,6 @@ void NodeMonitor::Initialize(v8::Isolate* isolate) {
         int rc;
         rc = pthread_create(&instance_->tmonitor_, NULL, monitorNodeThread, NULL);
         if (0 != rc) perror("pthread_create");
-
-        // set the thread name so it's easy to distinguish when debugging
-        rc = pthread_setname_np(instance_->tmonitor_, "monitr");
-        if (0 != rc) perror("pthread_setname_np");
     }
 }
 
