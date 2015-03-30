@@ -28,9 +28,9 @@
   },
   "devDependencies": {
     "unix-dgram": ">=0.0.4",
-    "jshint": "~0.9.0",
-    "yui-lint": "~0.1.1",
-    "istanbul": "~0.1.8",
+    "jshint": "*",
+    "yui-lint": "~0.2.0",
+    "istanbul": "*",
     "vows": "*"
   },
   "main": "./lib/monitor.js",
