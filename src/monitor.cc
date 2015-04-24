@@ -138,6 +138,7 @@ void* monitorNodeThread(void *arg) {
     int rc = pthread_setname_np(pthread_self(), "monitr");
     if (0 != rc) perror("pthread_setname_np");
 
+    NodeMonitor& monitor = NodeMonitor::getInstance();
     doSleep(REPORT_INTERVAL_MS);
     while (true) {
         if (hup_fired) {
@@ -157,15 +158,15 @@ void* monitorNodeThread(void *arg) {
                 // DebugEventHandler installed, since otherwise v8
                 // will *never* clear the DEBUGBREAK flag in the
                 // StackGuard thread_local inside v8
-                v8::Debug::DebugBreak(NodeMonitor::getIsolate());
+                v8::Debug::DebugBreak(monitor.getIsolate());
             }
             hup_fired = 0;
         }
         if (!errorCounter) {
-            if (!NodeMonitor::sendReport()) {
-            // slow down reporting if noone is listening
-            ++errorCounter;
-        }
+            if (!monitor.sendReport()) {
+                // slow down reporting if noone is listening
+                ++errorCounter;
+            }
         } else {
             ++errorCounter;
             if (errorCounter >= MAX_INACTIVITY_RETRIES) {
@@ -177,20 +178,30 @@ void* monitorNodeThread(void *arg) {
     exit(0);
 }
 
-// Node 0.11+
-#if (NODE_MODULE_VERSION > 0x000B)
-void updateLoopTimeStamp(uv_async_t *watcher) {
-    NodeMonitor::setStatistics();
+NAUV_WORK_CB(updateLoopTimeStamp) {
+    NodeMonitor::getInstance().setStatistics();
 }
-#else
-void updateLoopTimeStamp(uv_async_t *watcher, int revents = 0) {
-    NodeMonitor::setStatistics();
-}
-#endif
 
-/*
- * NodeMonitor
- * Spawns a thread to monitor stats every REPORT_INTERVAL_MS
+static NAN_GC_CALLBACK(startGC) {
+    NodeMonitor::getInstance().getGCUsageTracker().GetGCUsage(type)->Start();
+}
+
+static NAN_GC_CALLBACK(stopGC) {
+    NodeMonitor::getInstance().getGCUsageTracker().GetGCUsage(type)->Stop();
+}
+
+static void InstallGCEventCallbacks() {
+    NanAddGCPrologueCallback(startGC);
+    NanAddGCEpilogueCallback(stopGC);
+}
+
+static void UninstallGCEventCallbacks() {
+    NanRemoveGCPrologueCallback(startGC);
+    NanRemoveGCEpilogueCallback(stopGC);
+}
+
+/**
+ * Set up the singleton instance variable
  */
 void NodeMonitor::Initialize(v8::Isolate* isolate) {
 
@@ -201,10 +212,20 @@ void NodeMonitor::Initialize(v8::Isolate* isolate) {
     }
     assert(0 != isolate);
     instance_ = new NodeMonitor(isolate);
+}
 
-    instance_->ipcSocket_ = socket(PF_UNIX, SOCK_DGRAM, 0);
-    if (instance_->ipcSocket_ != -1) {
-        fcntl(instance_->ipcSocket_, F_SETFD, FD_CLOEXEC);
+/**
+ * Spawns a thread to monitor stats every REPORT_INTERVAL_MS
+ */
+void NodeMonitor::Start() {
+
+    assert( 0 != instance_ );
+
+    InstallGCEventCallbacks();
+
+    ipcSocket_ = socket(PF_UNIX, SOCK_DGRAM, 0);
+    if (ipcSocket_ != -1) {
+        fcntl(ipcSocket_, F_SETFD, FD_CLOEXEC);
     }
 
     /* Use a pipe to let the signal handler (which will likely be 
@@ -212,6 +233,7 @@ void NodeMonitor::Initialize(v8::Isolate* isolate) {
        This is the standard DJ Bernstein pipe for handling signals
        in multi-thread programs technique - http://cr.yp.to/docs/selfpipe.html */
     {
+        /* \todo - make these local to the NodeMonitor rather than global */
         int fd[2];
         if (pipe(fd)) {
             perror("Can't create pipe");
@@ -227,30 +249,36 @@ void NodeMonitor::Initialize(v8::Isolate* isolate) {
 
     // Set it up such that libuv will execute our callback function
     // (updateLoopTimeStamp) each time through the default uv event loop
-    uv_async_init(uv_default_loop(), &instance_->check_loop_, updateLoopTimeStamp);
-    uv_unref((uv_handle_t*)&instance_->check_loop_);
+    uv_async_init(uv_default_loop(), &check_loop_, updateLoopTimeStamp);
+    uv_unref((uv_handle_t*) &check_loop_);
 
     ipcInitialization();
     {
         int rc;
-        rc = pthread_create(&instance_->tmonitor_, NULL, monitorNodeThread, NULL);
+        rc = pthread_create(&tmonitor_, NULL, monitorNodeThread, NULL);
         if (0 != rc) perror("pthread_create");
     }
 }
 
+
+/**
+ * Update statistics each time through the libuv event loop
+ *
+ * This gets called in the context of the node/v8 execution thread, so
+ * it's no problem to call v8 specific APIs which may, in turn, invoke
+ * their own callbacks into Javascript (e.g. the getIntFunction()
+ * examples here)
+ **/
 void NodeMonitor::setStatistics() {
 
-    instance_->pending_ = 0;
-    instance_->loop_timestamp_ = uv_hrtime();
-    instance_->loop_count_++;
+    pending_ = 0;
+    loop_timestamp_ = uv_hrtime();
+    loop_count_++;
 
-    // obtain memory ration
+    // obtain heap memory usage ratio
     v8::HeapStatistics v8stats;
-#if (NODE_MODULE_VERSION > 0x000B)
     NanGetHeapStatistics(&v8stats);
-#else
-    V8::GetHeapStatistics(&v8stats);
-#endif
+
     double pmem = (v8stats.used_heap_size() / (double) v8stats.total_heap_size());
 
     // Obtains the CPU usage
@@ -259,11 +287,11 @@ void NodeMonitor::setStatistics() {
     long int uticks = 0;
     long int sticks = 0;
 
-    instance_->cpuTrackerSync_.GetCurrent(&ucpu, &scpu, &uticks, &sticks);
+    cpuTrackerSync_.GetCurrent(&ucpu, &scpu, &uticks, &sticks);
 
     // Get current number of requests
     unsigned int currReqs = getIntFunction("getTotalRequestCount");
-    unsigned int reqDelta = currReqs - instance_->stats_.lastRequests_;
+    unsigned int reqDelta = currReqs - stats_.lastRequests_;
 
     // Get the current time
     struct timeval cur_time = { 0, 0 };
@@ -271,67 +299,57 @@ void NodeMonitor::setStatistics() {
 
     // milliseconds
     long timeDelta = (cur_time.tv_sec * 1000 + cur_time.tv_usec / 1000)
-        - (instance_->stats_.lastTime_.tv_sec * 1000 + instance_->stats_.lastTime_.tv_usec / 1000);
+        - (stats_.lastTime_.tv_sec * 1000 + stats_.lastTime_.tv_usec / 1000);
 
     // Update the number of requests processed
     // and the ratio CPU/req.
-    instance_->stats_.lastRequests_ = currReqs;
-    instance_->stats_.lastCpuPerReq_ = (reqDelta <= 0) ? 0 : (scpu + ucpu) / reqDelta;
-    instance_->stats_.lastJiffiesPerReq_ = (reqDelta <= 0) ? 0
+    stats_.lastRequests_ = currReqs;
+    stats_.lastCpuPerReq_ = (reqDelta <= 0) ? 0 : (scpu + ucpu) / reqDelta;
+    stats_.lastJiffiesPerReq_ = (reqDelta <= 0) ? 0
         : ((float) (sticks + uticks)) / reqDelta;
 
     // Request delta - requests since last check.
-    instance_->stats_.lastReqDelta_ = reqDelta;
-    instance_->stats_.timeDelta_ = timeDelta;
+    stats_.lastReqDelta_ = reqDelta;
+    stats_.timeDelta_ = timeDelta;
 
     // Update time
-    instance_->stats_.lastTime_.tv_sec = cur_time.tv_sec;
-    instance_->stats_.lastTime_.tv_usec = cur_time.tv_usec;
+    stats_.lastTime_.tv_sec = cur_time.tv_sec;
+    stats_.lastTime_.tv_usec = cur_time.tv_usec;
 
     // Last RPS
-    instance_->stats_.lastRPS_ = (int) (reqDelta / (((double) timeDelta) / 1000));
+    stats_.lastRPS_ = (int) (reqDelta / (((double) timeDelta) / 1000));
 
     // Get currently open requests
-    instance_->stats_.currentOpenReqs_ = getIntFunction("getRequestCount");
+    stats_.currentOpenReqs_ = getIntFunction("getRequestCount");
 
     // currently open connections
-    instance_->stats_.currentOpenConns_ = getIntFunction("getOpenConnections");
+    stats_.currentOpenConns_ = getIntFunction("getOpenConnections");
 
     // Kb of transferred data
     float dataTransferred = ((float) (getIntFunction("getTransferred"))) / 1024;
 
-    instance_->stats_.lastKBytesSecond = (dataTransferred - instance_->stats_.lastKBytesTransfered_) / (((double) timeDelta) / 1000);
-    instance_->stats_.lastKBytesTransfered_ = dataTransferred;
-    instance_->stats_.healthIsDown_ = getBooleanFunction("isDown");
-    instance_->stats_.healthStatusCode_ = getIntFunction("getStatusCode");
-    instance_->stats_.healthStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
+    stats_.lastKBytesSecond = (dataTransferred - stats_.lastKBytesTransfered_) / (((double) timeDelta) / 1000);
+    stats_.lastKBytesTransfered_ = dataTransferred;
+    stats_.healthIsDown_ = getBooleanFunction("isDown");
+    stats_.healthStatusCode_ = getIntFunction("getStatusCode");
+    stats_.healthStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
 
-    instance_->stats_.pmem_ = pmem;
+    stats_.pmem_ = pmem;
 }
 
 void NodeMonitor::ipcInitialization() {
-    memset(&instance_->ipcAddr_, 0, sizeof(instance_->ipcAddr_));
-    instance_->ipcAddr_.sun_family = AF_UNIX;
+    memset(&ipcAddr_, 0, sizeof(ipcAddr_));
+    ipcAddr_.sun_family = AF_UNIX;
 
-    strncpy(instance_->ipcAddr_.sun_path, _ipcMonitorPath.c_str(),
-        sizeof(instance_->ipcAddr_.sun_path));
-    instance_->ipcAddrLen_ = sizeof(instance_->ipcAddr_.sun_family) + strlen(instance_->ipcAddr_.sun_path) + 1;
+    strncpy(ipcAddr_.sun_path, _ipcMonitorPath.c_str(),
+            sizeof(ipcAddr_.sun_path));
+    ipcAddrLen_ = sizeof(ipcAddr_.sun_family) + strlen(ipcAddr_.sun_path) + 1;
 
-    memset(&instance_->msg_, 0, sizeof(instance_->msg_));
+    memset(&msg_, 0, sizeof(msg_));
 
-    instance_->msg_.msg_name = &instance_->ipcAddr_;
-    instance_->msg_.msg_namelen = instance_->ipcAddrLen_;
-    instance_->msg_.msg_iovlen = 1;
-}
-
-/** Returns isolate which this NodeMonitor object is monitoring
- *
- *  Do not call unless NodeMonitor::Initialize() has already been called
- *
- **/
-v8::Isolate* NodeMonitor::getIsolate() {
-    assert( 0 != instance_ );
-    return instance_->isolate_;
+    msg_.msg_name = &ipcAddr_;
+    msg_.msg_namelen = ipcAddrLen_;
+    msg_.msg_iovlen = 1;
 }
 
 CpuUsageTracker::CpuUsageTracker() {
@@ -466,6 +484,56 @@ Local<Value> callFunction(const char* funcName) {
         
 }
 
+
+GCUsage::GCUsage() {
+    int rc = uv_mutex_init(&lock_);
+    if (0 != rc) {
+        perror("GCUsage: could not initialize uv_mutex");
+    }
+
+    bzero( &stats_, sizeof(GCStat) );
+    startTime_ = 0;
+}
+
+GCUsage::~GCUsage() {
+    uv_mutex_destroy(&lock_);
+}
+
+void GCUsage::Start() {
+    startTime_ = uv_hrtime();
+}
+
+void GCUsage::Stop() {
+    assert(0 != startTime_);
+    uint64_t elapsed = uv_hrtime() - startTime_;
+    {
+        ScopedUVLock scope( &lock_ );
+
+        stats_.numCalls++;
+        stats_.cumulativeTime += elapsed;
+        if (elapsed > stats_.maxTime) {
+            stats_.maxTime = elapsed;
+        }
+    }
+}
+
+
+const GCStat GCUsage::EndInterval() {
+    GCStat lastStat;
+    {
+        ScopedUVLock scope( &lock_ );
+
+        lastStat = stats_;
+        // now clear out stats since we've saved the last read
+        bzero( &stats_, sizeof(GCStat) );
+
+        // but don't clear out the startTime_ since we may be in
+        // the middle of another GC when this EndInterval is called
+        // by the profiling thread
+    }
+    return lastStat;
+}
+
 // calls the function which return the Int value
 int NodeMonitor::getIntFunction(const char* funcName) {
     NanScope();
@@ -485,16 +553,27 @@ bool NodeMonitor::getBooleanFunction(const char* funcName) {
     return false;
 }
 
+NodeMonitor& NodeMonitor::getInstance() {
+    assert( 0 != instance_ );
+    return *instance_;
+}
+
+/**
+ * Sends udp JSON datagram approximately once per REPORT_INTERVAL_MS
+ *
+ * Executed in the monitr pthread, *not* from any pthread executing v8
+ * Therefore, we can't directly access any Javascript functions/vars
+ **/
 bool NodeMonitor::sendReport() {
     static pid_t pid = getpid();
     static double minOverHead = 0;
 
-    // See how many reports has been processed since last call to this function
-    unsigned int diff_count = instance_->loop_count_ - instance_->last_loop_count_ + 1;
-    instance_->last_loop_count_ = instance_->loop_count_;
+    // See how many reports have been processed since last call to this function
+    unsigned int diff_count = loop_count_ - last_loop_count_ + 1;
+    last_loop_count_ = loop_count_;
 
     // The different between current and previous time (in miliseconds)
-    double ts_diff = (instance_->loop_timestamp_ - instance_->start_timestamp_) / 1.0e6;
+    double ts_diff = (loop_timestamp_ - start_timestamp_) / 1.0e6;
 
     // Obtains the CPU usage
     float scpu = 0.0f;
@@ -503,7 +582,7 @@ bool NodeMonitor::sendReport() {
     long int uticks = 0;
     long int sticks = 0;
 
-    instance_->cpuTracker_.GetCurrent(&ucpu, &scpu, &uticks, &sticks);
+    cpuTracker_.GetCurrent(&ucpu, &scpu, &uticks, &sticks);
 
     cpusum = ucpu + scpu;
 
@@ -513,14 +592,16 @@ bool NodeMonitor::sendReport() {
             minOverHead = ts_diff;
         }
     } else {
-    ts_diff = -ts_diff;
+        ts_diff = -ts_diff;
     }
 
-    instance_->consumption_ = cpusum;
-    Statistics& stats = instance_->stats_;
+    consumption_ = cpusum;
+    Statistics& stats = stats_;
 
-    char buffer[50];
+    const int k_MAX_BUFLENGTH = 100;
+    char buffer[k_MAX_BUFLENGTH];
 
+    // data must result in a valid JSON object, although we don't validate this!
     string data = "{\"status\":{";
     snprintf(buffer, sizeof(buffer), "\"cluster\":%d,", getpgid(0));
     data.append(buffer);
@@ -560,7 +641,7 @@ bool NodeMonitor::sendReport() {
         data.append(buffer);
     }
 
-    snprintf(buffer, sizeof(buffer), "\"ts\":%.2f,", instance_->loop_timestamp_ / 1.0e6);
+    snprintf(buffer, sizeof(buffer), "\"ts\":%.2f,", loop_timestamp_ / 1.0e6);
     if (!strstr(buffer, "nan")) {
         data.append(buffer);
     }
@@ -584,7 +665,7 @@ bool NodeMonitor::sendReport() {
     data.append(buffer);
 
     // startTime of the process.
-    snprintf(buffer, sizeof(buffer), "\"utcstart\":%d,", (int) instance_->startTime);
+    snprintf(buffer, sizeof(buffer), "\"utcstart\":%d,", (int) startTime);
     data.append(buffer);
 
     // open connections
@@ -614,6 +695,34 @@ bool NodeMonitor::sendReport() {
         snprintf(buffer, sizeof(buffer), "\"health_status_code\":%d,", stats.healthStatusCode_);
         data.append(buffer);
     }
+
+    // append gc stats
+    {
+        GCUsageTracker& tracker = getGCUsageTracker();
+
+        snprintf(buffer, sizeof(buffer), "\"gc\":{" );
+        data.append(buffer);
+
+        for (int i=0; i < GCUsageTracker::kNumGCTypes; ++i) {
+            v8::GCType type = GCUsageTracker::indexTov8GCType(i);
+            const GCStat stat = tracker.GetGCUsage( type )->EndInterval();
+
+            snprintf(buffer, sizeof(buffer), "\"%s\":{", GCUsageTracker::indexToString(i) );
+            data.append(buffer);
+
+            snprintf(buffer, sizeof(buffer), "\"count\":%lu,\"elapsed_ms\":%1.3f,\"max_ms\":%1.3f},",
+                     stat.numCalls, stat.cumulativeTime / (1000 * 1000.0), stat.maxTime / (1000*1000.0) );
+            data.append(buffer);
+        }
+
+        data.erase(data.size() - 1);; //get rid of last comma
+
+        // end the object literal
+        snprintf(buffer, sizeof(buffer), "}," );
+        data.append(buffer);
+
+    }
+
     data.erase(data.size() - 1);; //get rid of last comma
     
     data.append("}}");
@@ -624,32 +733,29 @@ bool NodeMonitor::sendReport() {
 
     vec.iov_base = (void *) data.c_str();
     vec.iov_len = strlen((char *) vec.iov_base);
-    instance_->msg_.msg_iov = &vec;
-    int rc = sendmsg(instance_->ipcSocket_, &instance_->msg_, MSG_DONTWAIT);
+    msg_.msg_iov = &vec;
+    int rc = sendmsg(ipcSocket_, &msg_, MSG_DONTWAIT);
 
-    if (!instance_->pending_) {
-        instance_->start_timestamp_ = uv_hrtime();
-        instance_->pending_ = 1;
+    if (!pending_) {
+        start_timestamp_ = uv_hrtime();
+        pending_ = 1;
     }
-    uv_async_send(&instance_->check_loop_);
+    uv_async_send(&check_loop_);
     return (rc != -1);
 }
 
 void NodeMonitor::Stop() {
-    if (instance_ == NULL) {
-        return;
-    }
-    pthread_cancel(instance_->tmonitor_);
-    close(instance_->ipcSocket_);
-    delete instance_;
-    instance_ = NULL;
-}
+    assert( 0 != instance_ );
 
-NodeMonitor::~NodeMonitor() {
+    UninstallGCEventCallbacks();
+
+    pthread_cancel(tmonitor_);
+    close(ipcSocket_);
 }
 
 NodeMonitor::NodeMonitor(v8::Isolate* isolate) :
     startTime(0),
+    gcTracker_(),
     tmonitor_((pthread_t) NULL),
     isolate_(isolate),
     loop_count_(0),
@@ -663,6 +769,9 @@ NodeMonitor::NodeMonitor(v8::Isolate* isolate) :
     startTime = time(NULL);
     memset(&stats_, 0, sizeof(Statistics));
     memset(&ipcAddr_, 0,sizeof(struct sockaddr_un));
+}
+
+NodeMonitor::~NodeMonitor() {
 }
 
 
@@ -780,13 +889,13 @@ static NAN_METHOD(SetterIPCMonitorPath) {
 
 static NAN_METHOD(StartMonitor) {
     NanScope();
-    NodeMonitor::Initialize(v8::Isolate::GetCurrent());
+    NodeMonitor::getInstance().Start();
     NanReturnValue(NanUndefined());
 }
 
 static NAN_METHOD(StopMonitor) {
     NanScope();
-    NodeMonitor::Stop();
+    NodeMonitor::getInstance().Stop();
     NanReturnValue(NanUndefined());
 }
 
@@ -805,7 +914,6 @@ static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* cont
     }
 }
 
-
 extern "C" void
 init(Handle<Object> exports) {
 
@@ -818,6 +926,7 @@ init(Handle<Object> exports) {
     exports->Set(NanNew("stop"),
                  NanNew<FunctionTemplate>(StopMonitor)->GetFunction());
 
+    NodeMonitor::Initialize(v8::Isolate::GetCurrent());
     InstallDebugEventListeners(_show_backtrace);
     RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
     
