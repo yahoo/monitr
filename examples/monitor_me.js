@@ -34,6 +34,15 @@ http.createServer(function (req, res) {
       monitor.showBacktrace = ! monitor.showBacktrace;
       res.end('Toggling backtrace to ' + monitor.showBacktrace + '\n');
   }
+  else if (parsedUrl.pathname == "/gc") {
+      if (typeof global.gc === 'function') {
+          global.gc();
+          res.end('Ran garbage collection explicitly');
+      }
+      else {
+          res.end('global.gc() is not exposed');
+      }
+  }
   else if (parsedUrl.pathname == "/fib") {
     var param = parsedUrl.query.n || 20;
     var startTime = new Date().getTime();

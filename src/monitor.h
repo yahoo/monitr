@@ -59,13 +59,122 @@ typedef struct {
     long unsigned int cpu_total_time;
 } CpuUsage;
 
+class CpuUsageTracker {
+public:
+    /**
+     * Returns estimated CPU usage since last call to this function.
+     */
+    int GetCurrent(float* ucpu_usage, float* scpu_usage, long int * uticks, long int* sticks);
+    CpuUsageTracker();
+private:
+    int ReadCpuUsage(CpuUsage* result);
+    void CalculateCpuUsage(CpuUsage* cur_usage, CpuUsage* last_usage,
+                    float* ucpu_usage, float* scpu_usage, long int * uticks, long int* sticks);
+    CpuUsage lastUsage_;
+    CpuUsage currentUsage_;
+};
+
+typedef struct {
+    long unsigned int numCalls;
+    uint64_t cumulativeTime; //< in nanoseconds
+    uint64_t maxTime;        //< in nanoseconds
+} GCStat;
+
+/**
+ * Simple wrapper class to handle scoped lock for pre-existing libuv mutex
+ */
+class ScopedUVLock {
+ public:
+    ScopedUVLock(uv_mutex_t* m) : m_(m) { uv_mutex_lock(m_); }
+    ~ScopedUVLock() { uv_mutex_unlock( m_ ); }
+ private:
+    uv_mutex_t* m_;
+
+    ScopedUVLock();  //< can't create one of these without a reference to a mutex
+};
+
+/**
+ * encapsulates garbage collection stats per "interval" where
+ * interval is arbitrary time between calls to GetStats
+ **/
+class GCUsage {
+public:
+    GCUsage();
+    ~GCUsage();
+
+    /** Returns garbage collection (GC) stats since last call to this function.
+     *  Also resets the counters in order to start a new interval of GC stats
+     */
+    const GCStat EndInterval();
+
+    /**
+     * start and stop events get called from v8 gc prologue/epilogue
+     **/
+    void Start();
+    void Stop();
+
+ private:
+    GCStat     stats_;
+    uint64_t   startTime_;
+
+    // lock used to prevent reading/writing GCStat data structure at the same time
+    // by more than one thread
+    uv_mutex_t  lock_;
+
+    /* prevent copying/assigning */
+    GCUsage(const GCUsage&);
+    GCUsage& operator=(const GCUsage&);
+};
+
+
+class GCUsageTracker {
+public:
+    GCUsageTracker() {};
+    ~GCUsageTracker() {};
+
+    inline GCUsage* GetGCUsage( const v8::GCType type ) {
+        int collector = v8GCTypeToIndex( type );
+        assert( collector >= 0 && collector < kNumGCTypes );
+
+        return &usage_[ v8GCTypeToIndex( type )];
+    }
+
+    static const int kNumGCTypes = 2;  //< must match # of distinct v8::GCTypes in v8.h
+
+    static inline int v8GCTypeToIndex( const v8::GCType type ) {
+        return type == v8::kGCTypeScavenge ? 0 : 1;
+    }
+
+    static inline v8::GCType indexTov8GCType( const int type ) {
+        assert( type < kNumGCTypes );
+
+        switch (type) {
+        case 0:  return v8::kGCTypeScavenge;
+        case 1:  return v8::kGCTypeMarkSweepCompact;
+        default:
+            return v8::kGCTypeAll;  //< with assertion above, this is unreachable
+        }
+    }
+
+    static const char* indexToString( const int type ) {
+        assert( type < kNumGCTypes );
+
+        switch (type) {
+        case 0:  return "scavenge";
+        case 1:  return "marksweep";
+        default:
+            return "unknown";  //< with assertion above, this is unreachable
+        }
+    }
+
+ private:
+    GCUsage  usage_[kNumGCTypes];
+};
+
 typedef struct {
 	
 	// time since last check
 	volatile struct timeval lastTime_;
-	
-	// last time delta (period between checks)
-	volatile long timeDelta_;
 	
 	// time since last request
 	volatile struct timeval timeSinceLastRequest_;
@@ -81,7 +190,7 @@ typedef struct {
 	volatile int lastRequests_;
 	
 	// delta between last check essentially req/per second
-	// if devided by curTime - lastTime 
+	// if divided by curTime - lastTime
 	volatile int lastReqDelta_;
 	
 	// number of open requests
@@ -106,74 +215,78 @@ typedef struct {
 	
 } Statistics;
 
-class CpuUsageTracker {
-public:
-    
-    /**
-     * Returns estimated CPU usage since last call to this function.
-     */
-    int GetCurrent(float* ucpu_usage, float* scpu_usage, long int * uticks, long int* sticks);
-    CpuUsageTracker();
-private: 
-    int ReadCpuUsage(CpuUsage* result); 
-    void CalculateCpuUsage(CpuUsage* cur_usage, CpuUsage* last_usage,
-                    float* ucpu_usage, float* scpu_usage, long int * uticks, long int* sticks);
-    CpuUsage lastUsage_; 
-    CpuUsage currentUsage_; 
-};
-
 
 /** Singleton class that collects and sends stats about running isolate
  *
  * \todo This should be extended into a non-singleton
  * class that can be allocated one per v8 isolate, but for the
  * moment, it assumes there is only one running in the whole process
- * (currently true for default v8).
+ * (currently true for default nodejs).
  **/
 class NodeMonitor {
- public:
-  static void Initialize(v8::Isolate* isolate);
-  static void Stop();
-  virtual ~NodeMonitor();
+public:
+    /** Initializes the singleton.  Do not call any other functions
+     * unless this function has been called first 
+     */
+    static void Initialize(v8::Isolate* isolate);
+         
+    void Start();
+    void Stop();
+    virtual ~NodeMonitor();
   
-  static void ipcInitialization();
-  static bool sendReport();
-  static void setStatistics();
-  
-  static v8::Isolate* getIsolate();
- private:
-  time_t startTime;
-  
-  // Required to track CPU load asyncronously
-  CpuUsageTracker cpuTracker_;
+    /** Returns isolate which this NodeMonitor object is monitoring
+     *
+     * 
+     **/
+    v8::Isolate* getIsolate() { return isolate_; };
+    GCUsageTracker& getGCUsageTracker() { return gcTracker_; }
 
-  // Required to track CPU load syncronously
-  // in order to calculate the request per CPU ration
-  CpuUsageTracker cpuTrackerSync_;
-  Statistics stats_;
+    void ipcInitialization();
+    bool sendReport();
+    void setStatistics();
   
-  pthread_t tmonitor_;    //< the pthread doing the monitoring
-  v8::Isolate* isolate_;  //< the isolate this monitor is monitoring
-  
-  uv_async_t check_loop_;
-  
-  volatile unsigned int loop_count_;
-  volatile unsigned int last_loop_count_;
-  volatile uint64_t loop_timestamp_;
-  volatile uint64_t start_timestamp_;
-  volatile double consumption_;
-  volatile int pending_;
-  
-  struct sockaddr_un ipcAddr_;
-  socklen_t ipcAddrLen_;
-  struct msghdr msg_;
-  int ipcSocket_;
-  
-  static NodeMonitor* instance_;  //< the singleton instance
+    static NodeMonitor& getInstance();
 
-  NodeMonitor(v8::Isolate* isolate);
-  static int getIntFunction(const char* funcName);
-  static bool getBooleanFunction(const char* funcName);
+protected:
+    NodeMonitor(v8::Isolate* isolate);
+
+private:
+    time_t startTime;
+  
+    // Required to track CPU load asynchronously \todo no longer used?
+    CpuUsageTracker cpuTracker_;
+
+    // Required to track CPU load synchronously
+    // in order to calculate the request per CPU ratio
+    CpuUsageTracker cpuTrackerSync_;
+    Statistics stats_;
+  
+    GCUsageTracker gcTracker_; //< keeps track of gc events
+    pthread_t tmonitor_;    //< the pthread doing the monitoring
+    v8::Isolate* isolate_;  //< the isolate this monitor is monitoring
+  
+    uv_async_t check_loop_;
+  
+    volatile unsigned int loop_count_;
+    volatile unsigned int last_loop_count_;
+    volatile uint64_t loop_timestamp_;
+    volatile uint64_t start_timestamp_;
+    volatile double consumption_;
+    volatile int pending_;
+  
+    struct sockaddr_un ipcAddr_;
+    socklen_t ipcAddrLen_;
+    struct msghdr msg_;
+    int ipcSocket_;
+  
+    static int getIntFunction(const char* funcName);
+    static bool getBooleanFunction(const char* funcName);
+
+    static NodeMonitor* instance_;  //< the singleton instance
+
+    // null private copy/assignment constructors
+    NodeMonitor(const NodeMonitor&);
+    const NodeMonitor operator=(const NodeMonitor&);
 };
 
 }

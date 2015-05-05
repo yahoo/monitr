@@ -5,9 +5,21 @@ Nodejs process monitoring tool.
 This module currently works only on Linux operating systems.
 This module spawns a thread and begins monitoring the process. 
 
-It looks up /proc/* files on the system to report CPU Usage.
-It looks up /proc/pid/* files on the system to report its own stats.
-It calls the process.monitor.* methods to report total requests, open connections and total data transferred.
+It looks up /proc/* files on the system to report CPU Usage.  It looks
+up /proc/pid/* files on the system to report its own stats.  It calls
+the process.monitor.* methods to report total requests since
+monitoring started (`reqstotal`), current requests in flight (`oreqs`),
+current open connections (`oconns`) and total data
+returned since monitoring started (`kb_trans`).  _Note: `oreqs` may be
+greater than `oconns` when keepalive is enabled_.
+
+It attaches to the v8 garbage collection hooks to
+instrument (for each GC type) the following stats in the past
+reporting interval.
+
+1.  `count` : number of times GC type invoked
+2.  `elapsed_ms`: total elapsed time nodejs thread is blocked
+3.  `max_ms`:  maximum time spent blocked by any one GC event
 
 process.monitor.* methods are set by lib/monitor.js.
 
@@ -31,10 +43,15 @@ Here is the list of data the module reports periodically:
        kbs_out: <kbs of data transferred since last stats reporting>,
        elapsed: <time elapsed since last event>,
        kb_trans: <total kbs of data transferred>,
-       jiffyperreq: <cpu usage in terms of ticks per request> 
+       jiffyperreq: <cpu usage in terms of ticks per request>,
+       gc: {
+           scavenge: { count: <number>, elapsed_ms: <number>, max_ms: <number> },
+           marksweep: { count: <number>, elapsed_ms: <number>, max_ms: <number> }
+       }
     }
  }
 ```
+
 
 This package is tested only with Node versions 10 and 12.
 

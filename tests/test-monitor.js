@@ -85,13 +85,25 @@ var expectedProperties = [
     'utcstart',
     'oconns',
     'kb_trans',
-    'kbs_out'
+    'kbs_out',
+    'gc'
+];
+
+var expectedGCCollectors = [
+    'scavenge',
+    'marksweep'
+];
+
+var expectedGCStatProperties = [
+    'count',
+    'elapsed_ms',
+    'max_ms'
 ];
 
 var server1;
 
-var tests = {
-    'Verify message is sent in a server' : {
+var batch1 = {
+    'Verify message sent from a server' : {
         topic: function () {
         var self = this,
             monitorSocket,
@@ -120,8 +132,7 @@ var tests = {
         });
         setTimeout(function() {
             monitorSocket = dgram.createSocket('unix_dgram',function (msg, rinfo) {
-                console.log('message: ' + msg.toString());
-                msgObj = JSON.parse(msg.toString());
+                msg = msg.toString()
                 monitorSocket.close();
                 
                 return self.callback(null, {
@@ -129,7 +140,7 @@ var tests = {
                         requests: requests,
                         openConnections: openConnections,
                         transferred: transferred,
-                        msgObj: msgObj
+                        msg: msg
                 });             
                 
             });
@@ -152,79 +163,103 @@ var tests = {
             });
         }, 1100);
         },
-        'should have all expected properties': function (topic) {
-            assert.ok(topic.msgObj.hasOwnProperty('status'));
-            var status = topic.msgObj.status;
-            for (index = 0; index < expectedProperties.length; ++index) {
-                assert.ok(topic.msgObj.status.hasOwnProperty(expectedProperties[index]));
-            }
-        },
         'process.monitor functions should return values': function (topic) {
             assert.equal(1, topic.totalRequests);
             assert.equal(0, topic.requests);
             assert.ok(topic.transferred !== 0);
         },
-        'Verify health check values' : {
-            topic : function() {
-                var self2 = this;
-                process.monitor.setHealthStatus(true,200);
-                setTimeout(function() {
-                    monitorSocket = dgram.createSocket('unix_dgram',function (msg, rinfo) {
-                        console.log('message: ' + msg.toString());
-                        msgObj = JSON.parse(msg.toString());
-                        monitorSocket.close();
-                            return self2.callback(null, {
-                                isDown: process.monitor.isDown(),
-                                statusCode: process.monitor.getStatusCode(),
-                                timestamp: process.monitor.getStatusTimestamp(),
-                                date : process.monitor.getStatusDate(),
-                                msgObj: msgObj
-                            });             
-                        
-                    });
-                    fs.unlink(monitor.ipcMonitorPath,
-                        function (err) {
-                            if (err) {
-                                console.log("Deleted socket with ERROR " + err.stack);
-                            }
-                            // get a directory and set a umask
-                            var dir = require('path').dirname(monitor.ipcMonitorPath),
-                                um = process.umask(0);
-        
-                            try {
-                                mkdirs(dir, 511);
-                            } catch (ex) {
-                                console.log("ERROR: Failed to create directory for socket " + ex.stack);
-                            }
-                            monitorSocket.bind(monitor.ipcMonitorPath);
-                            process.umask(um);
-                    });
-                }, 1100);
-            },
-            'validate health information': function (topic) {
-                assert.equal(true, topic.isDown);
-                assert.equal(200, topic.statusCode);
-                assert.equal(200, topic.msgObj.status.health_status_code);
-                assert.equal(true, topic.msgObj.status.health_is_down);
-                assert.equal(topic.timestamp, topic.msgObj.status.health_status_timestamp);
-                assert.ok(Date.now() - topic.date.getTime() <= 2 * 60 * 1000); //less than 2 min
-                
-                process.monitor.setHealthStatus(false,300);
-                assert.equal(false, process.monitor.isDown());
-                assert.equal(300, process.monitor.getStatusCode());
-                assert.ok(process.monitor.getStatusTimestamp() > topic.timestamp);
-                
-                
-            } 
+        'should have valid JSON output': function (topic) {
+            assert.doesNotThrow(function() { JSON.parse(topic.msg); }, Error);
+            setTimeout(function() {}, 1);  // give sub-context based topics chance to run
         },
-      teardown: function() {
-        server1.close();
-      }
+        'should have valid JSON message output': {
+            topic: function(topic) {
+                assert.doesNotThrow(function() { JSON.parse(topic.msg); }, Error);
+                return JSON.parse(topic.msg);
+            },
+            'with all expected properties': function (msg) {
+                assert.ok(msg.hasOwnProperty('status'));
+                var status = msg.status;
+                for (index = 0; index < expectedProperties.length; ++index) {
+                    assert.ok(status.hasOwnProperty(expectedProperties[index]));
+                }
+            },
+            'including gc stats': {
+                topic: function (msg) { return msg.status.gc; },
+                'for each collector': function (gc) {
+                    for (index = 0; index < expectedGCCollectors.length; ++index) {
+                        assert.ok(gc.hasOwnProperty(expectedGCCollectors[index]));
+                    }
+                },
+                'with expected properties': function(gc) {
+                    for (index = 0; index < expectedGCCollectors.length; ++index) {
+                        var stats = gc[expectedGCCollectors[index]];
+                        for (index2 = 0; index2 < expectedGCStatProperties.length; ++index2) {
+                            assert.ok(stats.hasOwnProperty(expectedGCStatProperties[index2]));
+                        }
+                    }
+                }
+            }
+        },
+        teardown: function() {
+            server1.close();
+        }
     }
+};
+
+var batch2 = {
+    'Verify health check values' : {
+        topic : function() {
+            var self = this;
+            process.monitor.setHealthStatus(true,200);
+            setTimeout(function() {
+                monitorSocket = dgram.createSocket('unix_dgram',function (msg, rinfo) {
+                    msgObj = JSON.parse(msg.toString());
+                    monitorSocket.close();
+                    return self.callback(null, {
+                        isDown: process.monitor.isDown(),
+                        statusCode: process.monitor.getStatusCode(),
+                        timestamp: process.monitor.getStatusTimestamp(),
+                        date : process.monitor.getStatusDate(),
+                        msgObj: msgObj
+                    });
+                });
+                fs.unlink(monitor.ipcMonitorPath,
+                          function (err) {
+                              if (err) {
+                                  console.log("Deleted socket with ERROR " + err.stack);
+                              }
+                              // get a directory and set a umask
+                              var dir = require('path').dirname(monitor.ipcMonitorPath),
+                                  um = process.umask(0);
+                              try {
+                                  mkdirs(dir, 511);
+                              } catch (ex) {
+                                  console.log("ERROR: Failed to create directory for socket " + ex.stack);
+                              }
+                              monitorSocket.bind(monitor.ipcMonitorPath);
+                              process.umask(um);
+                          });
+            }, 1100);
+        },
+        'validate health information': function (topic) {
+            assert.equal(true, topic.isDown);
+            assert.equal(200, topic.statusCode);
+            assert.equal(200, topic.msgObj.status.health_status_code);
+            assert.equal(true, topic.msgObj.status.health_is_down);
+            assert.equal(topic.timestamp, topic.msgObj.status.health_status_timestamp);
+            assert.ok(Date.now() - topic.date.getTime() <= 2 * 60 * 1000); //less than 2 min
+
+            process.monitor.setHealthStatus(false,300);
+            assert.equal(false, process.monitor.isDown());
+            assert.equal(300, process.monitor.getStatusCode());
+            assert.ok(process.monitor.getStatusTimestamp() > topic.timestamp);
+        }
+    },
 };
 
 process.on('exit', function () {
     monitor.stop();
 });
 
-vows.describe('monitor').addBatch(tests).export(module);
+vows.describe('monitor').addBatch(batch1).addBatch(batch2).export(module);
