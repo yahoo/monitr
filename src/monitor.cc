@@ -11,28 +11,22 @@
 #include <sys/prctl.h>  // to set thread name
 #include <dirent.h>
 #include <math.h>
-#include <node.h>
-#include <node_internals.h>
-#include <v8.h>
-#include <v8-debug.h>
 #include <unistd.h>
-
-#define _WIN32 1
-#define _USING_UV_SHARED 1
-#ifdef BUILDING_UV_SHARED
-#undef BUILDING_UV_SHARED
-#endif
-
-#include <uv.h>
-
-#include "monitor.h"
+#include <sys/time.h>
+#include <signal.h>
 
 #include <iostream>
 #include <fstream>
-#include <sys/time.h>
 #include <algorithm>
-#include <signal.h>
 
+// v8 compatibility templates
+#include "nan.h"
+
+// need v8-debug since we access the v8::Debug classes
+// in order to "break" into running Javascript
+#include <v8-debug.h>
+
+#include "monitor.h"
 
 #ifdef __APPLE__
     #include <sys/sysctl.h>
@@ -43,7 +37,7 @@
 #endif
 
 #define THROW_BAD_ARGS() \
-    NanThrowError(Exception::TypeError(NanNew<String>(__FUNCTION__)));
+    Nan::ThrowError(Exception::TypeError(Nan::New<String>(__FUNCTION__).ToLocalChecked()));
 
 
 using namespace std;
@@ -191,13 +185,13 @@ static NAN_GC_CALLBACK(stopGC) {
 }
 
 static void InstallGCEventCallbacks() {
-    NanAddGCPrologueCallback(startGC);
-    NanAddGCEpilogueCallback(stopGC);
+    Nan::AddGCPrologueCallback(startGC);
+    Nan::AddGCEpilogueCallback(stopGC);
 }
 
 static void UninstallGCEventCallbacks() {
-    NanRemoveGCPrologueCallback(startGC);
-    NanRemoveGCEpilogueCallback(stopGC);
+    Nan::RemoveGCPrologueCallback(startGC);
+    Nan::RemoveGCEpilogueCallback(stopGC);
 }
 
 /**
@@ -277,7 +271,7 @@ void NodeMonitor::setStatistics() {
 
     {   // obtain heap memory usage ratio
         v8::HeapStatistics v8stats;
-        NanGetHeapStatistics(&v8stats);
+        Nan::GetHeapStatistics(&v8stats);
 
         stats_.pmem_ = (v8stats.used_heap_size() / (double) v8stats.total_heap_size());
     }
@@ -467,23 +461,33 @@ void CpuUsageTracker::CalculateCpuUsage(CpuUsage* cur_usage,
 }
 
 Local<Value> callFunction(const char* funcName) {
-    NanEscapableScope();
+    Nan::EscapableHandleScope scope;
     
-    Local<Value> pr = NanGetCurrentContext()->Global()->Get(NanNew<String>("process"));
+    Local<v8::Object> global = Nan::GetCurrentContext()->Global();
 
-    if (pr->IsObject()) {
-        Local<Value> exten = pr->ToObject()->Get(NanNew<String>("monitor"));
-        if (exten->IsObject()) {
-            Local<Value> fval = exten->ToObject()->Get(NanNew<String>(funcName));
-            if (fval->IsFunction()) {
-                Local<Function> fn = Local<Function>::Cast(fval);
-                Local<Value> argv[1];
-                argv[0] = NanNew(NanNull());
-                return  NanEscapeScope(fn->Call(NanGetCurrentContext()->Global(), 1, argv));
-            }
+    // We can assume that "process" is always a global object in node
+    Local<v8::Object> prObject = Nan::To<v8::Object>(global->Get(
+                                    Nan::New<v8::String>("process").ToLocalChecked())
+                                                     ).ToLocalChecked();
+
+    Nan::MaybeLocal<v8::Value> exten_maybe = prObject->Get(Nan::New<v8::String>("monitor").ToLocalChecked());
+
+    // if monitor extension is not installed, then process.monitor may not exist
+    if (!exten_maybe.IsEmpty()) {
+        // but if it does exist, then it should always be an object
+        Local<v8::Object> extenObj = Nan::To<v8::Object>(exten_maybe.ToLocalChecked()).ToLocalChecked();
+
+        // Does funcName function exist on process.monitor object?
+        Nan::MaybeLocal<v8::Value> fval = extenObj->Get(Nan::New<v8::String>(funcName).ToLocalChecked());
+        if (!fval.IsEmpty() && fval.ToLocalChecked()->IsFunction()) {
+            Nan::Callback callback( fval.ToLocalChecked().As<v8::Function>() );
+
+            Local<v8::Value> result = callback(global, 0, 0 );
+
+            return scope.Escape(result);
         }
     }
-    return NanEscapeScope(NanNew(NanNull()));
+    return Nan::Null();
         
 }
 
@@ -537,9 +541,9 @@ const GCStat GCUsage::EndInterval() {
     return lastStat;
 }
 
-// calls the function which return the Int value
+// calls a Javascript function which returns an integer result
 int NodeMonitor::getIntFunction(const char* funcName) {
-    NanScope();
+    Nan::HandleScope scope;
     Local<Value> res = callFunction(funcName);
     if (res->IsNumber()) {
         return res->Uint32Value();
@@ -547,8 +551,9 @@ int NodeMonitor::getIntFunction(const char* funcName) {
     return 0;
 }
     
+// calls a Javascript function which returns a boolean result
 bool NodeMonitor::getBooleanFunction(const char* funcName) {
-    NanScope();
+    Nan::HandleScope scope;
     Local<Value> res = callFunction(funcName);
     if (res->IsBoolean()) {
         return res->BooleanValue();
@@ -780,29 +785,30 @@ NodeMonitor::~NodeMonitor() {
 
 
 void LogStackTrace(Handle<Object> obj) {
+    Nan::HandleScope scope;
     try {
-        Local<Value> args[] = {};
-        Local<Value> frameCount = obj->Get(NanNew<String>("frameCount"));
+        Local<Value> info[] = {};
+        Local<Value> frameCount = obj->Get(Nan::New<String>("frameCount").ToLocalChecked());
         Local<Function> frameCountFunc = Local<Function>::Cast(frameCount);
-        Local<Value> frameCountVal = frameCountFunc->Call(obj, 0, args);
+        Local<Value> frameCountVal = frameCountFunc->Call(obj, 0, info);
         Local<Number> frameCountNum = frameCountVal->ToNumber();
         
         cout << "Stack Trace:" << endl;
         
         int totalFrames = frameCountNum->Value();
         for(int i = 0; i < totalFrames; i++) {
-            Local<Value> frameNumber[] = {NanNew<Number>(i)};
-            Local<Value> setSelectedFrame = obj->Get(NanNew<String>("setSelectedFrame"));
+            Local<Value> frameNumber[] = {Nan::New<Number>(i)};
+            Local<Value> setSelectedFrame = obj->Get(Nan::New<String>("setSelectedFrame").ToLocalChecked());
             Local<Function> setSelectedFrameFunc = Local<Function>::Cast(setSelectedFrame);
             setSelectedFrameFunc->Call(obj, 1, frameNumber);
             
-            Local<Value> frame = obj->Get(NanNew<String>("frame"));
+            Local<Value> frame = obj->Get(Nan::New<String>("frame").ToLocalChecked());
             Local<Function> frameFunc = Local<Function>::Cast(frame);
-            Local<Value> frameVal = frameFunc->Call(obj, 0, args);
+            Local<Value> frameVal = frameFunc->Call(obj, 0, info);
             Local<Object> frameObj = frameVal->ToObject();
-            Local<Value> frameToText = frameObj->Get(NanNew<String>("toText"));
+            Local<Value> frameToText = frameObj->Get(Nan::New<String>("toText").ToLocalChecked());
             Local<Function> frameToTextFunc = Local<Function>::Cast(frameToText);
-            Local<Value> frameToTextVal = frameToTextFunc->Call(frameObj, 0, args);
+            Local<Value> frameToTextVal = frameToTextFunc->Call(frameObj, 0, info);
             String::Utf8Value frameText(frameToTextVal);
             cout << *frameText << endl;
         }
@@ -860,50 +866,6 @@ static void InstallDebugEventListeners(bool install) {
     }
 }
     
-
-static NAN_GETTER(GetterIPCMonitorPath) {
-    NanScope();
-    NanReturnValue(NanNew<String>(_ipcMonitorPath.c_str()));
-}
-
-static NAN_GETTER(GetterShowBackTrace) {
-    NanScope();
-    NanReturnValue(NanNew<Boolean>(_show_backtrace));
-}
-
-static NAN_SETTER(SetterShowBackTrace) {
-    NanScope();
-    bool newSetting = value->BooleanValue();
-    if (newSetting != _show_backtrace) {
-        _show_backtrace = newSetting;
-        InstallDebugEventListeners(_show_backtrace);
-    }
-}
-
-static NAN_METHOD(SetterIPCMonitorPath) {
-    NanScope();
-    if (args.Length() < 1 ||
-        (!args[0]->IsString() && !args[0]->IsUndefined() && !args[0]->IsNull())) {
-        THROW_BAD_ARGS();
-    }
-    String::Utf8Value ipcMonitorPath(args[0]);
-    _ipcMonitorPath = *ipcMonitorPath;
-    NanReturnValue(NanUndefined());
-}
-
-static NAN_METHOD(StartMonitor) {
-    NanScope();
-    NodeMonitor::getInstance().Start();
-    NanReturnValue(NanUndefined());
-}
-
-static NAN_METHOD(StopMonitor) {
-    NanScope();
-    NodeMonitor::getInstance().Stop();
-    NanReturnValue(NanUndefined());
-}
-
-
 static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* context) {
     savedSigInfo = *siginfo;
     hup_fired = 1;
@@ -912,23 +874,73 @@ static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* cont
     // enforce serial write via signal pipe
     // This will be handled by the monitor thread which is running a pselect() to
     // listen to any events on the other end of this pipe file descriptor pair.
-    ssize_t rc = write(sigpipefd_w, &c, 1);  
+    ssize_t rc = write(sigpipefd_w, &c, 1);
     if (rc < 0) {
         perror("write");
     }
 }
 
-extern "C" void
-init(Handle<Object> exports) {
 
-    NODE_PROT_RO_PROPERTY(exports, "ipcMonitorPath", GetterIPCMonitorPath);
-    NODE_PROTECTED_PROPERTY(exports, "showBacktrace", GetterShowBackTrace, SetterShowBackTrace);
-    exports->Set(NanNew("setIpcMonitorPath"),
-                 NanNew<FunctionTemplate>(SetterIPCMonitorPath)->GetFunction());
-    exports->Set(NanNew("start"),
-                 NanNew<FunctionTemplate>(StartMonitor)->GetFunction());
-    exports->Set(NanNew("stop"),
-                 NanNew<FunctionTemplate>(StopMonitor)->GetFunction());
+// Javascript interface routines
+// Javascript getter/setters
+static NAN_GETTER(GetterIPCMonitorPath) {
+    info.GetReturnValue().Set(Nan::New<String>(_ipcMonitorPath.c_str()).ToLocalChecked());
+}
+
+static NAN_GETTER(GetterShowBackTrace) {
+    info.GetReturnValue().Set(_show_backtrace);
+}
+
+static NAN_SETTER(SetterShowBackTrace) {
+    bool newSetting = value->BooleanValue();
+    if (newSetting != _show_backtrace) {
+        _show_backtrace = newSetting;
+        InstallDebugEventListeners(_show_backtrace);
+    }
+}
+
+// methods that can be called from Javascript
+static NAN_METHOD(SetterIPCMonitorPath) {
+    if (info.Length() < 1 ||
+        (!info[0]->IsString() && !info[0]->IsUndefined() && !info[0]->IsNull())) {
+        THROW_BAD_ARGS();
+    }
+    String::Utf8Value ipcMonitorPath(info[0]);
+    _ipcMonitorPath = *ipcMonitorPath;
+    info.GetReturnValue().SetUndefined();
+}
+
+static NAN_METHOD(StartMonitor) {
+    NodeMonitor::getInstance().Start();
+    info.GetReturnValue().SetUndefined();
+}
+
+static NAN_METHOD(StopMonitor) {
+    NodeMonitor::getInstance().Stop();
+    info.GetReturnValue().SetUndefined();
+}
+
+
+// main module initialization
+NAN_MODULE_INIT(init) {
+    // target is defined in the NAN_MODULE_INIT macro as ADDON_REGISTER_FUNCTION_ARGS_TYPE
+    //  -- i.e. v8::Local<v8::Object> for nodejs-3.x and up,
+    // but v8::Handle<v8::Object> for nodejs-0.12.0
+
+#if NODE_MODULE_VERSION < IOJS_3_0_MODULE_VERSION
+    Local<Object> exports = Nan::New<Object>(target);
+#else
+    Local<Object> exports = target;
+#endif
+
+    Nan::SetAccessor( exports, Nan::New("ipcMonitorPath").ToLocalChecked(),
+                      GetterIPCMonitorPath, 0, v8::Local<v8::Value>(),
+                      v8::PROHIBITS_OVERWRITING, v8::DontDelete );
+    Nan::SetAccessor( exports, Nan::New("showBacktrace").ToLocalChecked(),
+                      GetterShowBackTrace, SetterShowBackTrace );
+    Nan::Export( exports, "setIpcMonitorPath", SetterIPCMonitorPath);
+    Nan::Export( exports, "start", StartMonitor);
+    Nan::Export( exports, "stop", StopMonitor);
 
     NodeMonitor::Initialize(v8::Isolate::GetCurrent());
     InstallDebugEventListeners(_show_backtrace);

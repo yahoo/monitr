@@ -24,28 +24,10 @@
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <pthread.h>
-#include <uv.h>
-#include <v8.h>
 
 #include <list>
 #include <string>
 #include <vector>
-
-
-#include "nan.h"
-
-#define NODE_PROTECTED_PROPERTY(obj, name, getter, setter)                \
-  obj->SetAccessor(NanNew(name), getter, setter,           \
-                   v8::Handle<v8::Value>(), PROHIBITS_OVERWRITING,        \
-                    DontDelete)
-
-#define NODE_PROT_RO_PROPERTY(obj, name, getter)                          \
-  NODE_PROTECTED_PROPERTY(obj, name, getter, 0)
-
-#define NODE_PROTECTED_METHOD(obj, name, callback)                        \
-  obj->Set(v8::String::NewSymbol(name),                                   \
-           v8::FunctionTemplate::New(callback)->GetFunction(),            \
-           static_cast<v8::PropertyAttribute>(v8::ReadOnly|v8::DontDelete))
 
 namespace ynode {
 

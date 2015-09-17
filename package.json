@@ -32,10 +32,10 @@
   },
   "dependencies": {
     "bindings": "*",
-    "nan": "^1.4.0"
+    "nan": "^2.0.9"
   },
   "devDependencies": {
-    "unix-dgram": ">=0.0.4",
+    "unix-dgram": "~0.2.0",
     "jshint": "*",
     "yui-lint": "~0.2.0",
     "istanbul": "*",
