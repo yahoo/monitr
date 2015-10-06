@@ -47,10 +47,14 @@ using namespace v8;
 // This is the default IPC path where the stats are written to
 // Could use the setter method to change this
 static string _ipcMonitorPath = "/tmp/nodejs.mon";
-static bool _show_backtrace = false;  //< default to false to avoid performance
-static const int MAX_INACTIVITY_RETRIES = 5;
-// default is to show a backtrace when receiving a HUP
+static bool _show_backtrace = false;  //< default to false for performance
+
+// Normally reports will be sent every REPORT_INTERVAL_MS
+// However, if there is no receiver on the other end (i.e. sendmsg()
+// returns -1), then the reporting thread will wait MAX_INACTIVITY_RETRIES
+// before trying again.
 static const int REPORT_INTERVAL_MS = 1000;
+static const int MAX_INACTIVITY_RETRIES = 5;
 
 /* globals used for signal catching, etc */
 static volatile sig_atomic_t hup_fired = 0;
@@ -64,6 +68,43 @@ namespace ynode {
 
 // our singleton instance
 NodeMonitor* NodeMonitor::instance_ = NULL;
+
+// some utility functions to make code cleaner
+static inline v8::Local<v8::String> v8_str( const char* s ) {
+    Nan::MaybeLocal<v8::String> s_maybe = Nan::New<v8::String>(s);
+    return s_maybe.ToLocalChecked();
+}
+
+static inline v8::Local<v8::Value> getObjectProperty(const v8::Local<v8::Object>& object,
+                                                     const char* key) {
+    v8::Local<v8::String> keyString = v8_str(key);
+    Nan::MaybeLocal<v8::Value> value = Nan::Get(object, keyString);
+    if (value.IsEmpty()) {
+        return Nan::Undefined();
+    }
+    return value.ToLocalChecked();
+}
+
+/**
+ * obtain reference to process.monitor from global object
+ *
+ * Preconditions:  process.monitor exists and is an object
+ **/
+static v8::Local<v8::Object> getProcessMonitor() {
+    Nan::EscapableHandleScope scope;
+
+    v8::Local<v8::Object> global = Nan::GetCurrentContext()->Global();
+    v8::Local<v8::Value> process = getObjectProperty( global, "process" );
+    assert( Nan::Undefined() != process && process->IsObject());
+
+    // monitr javascript interface library must create process.monitor
+
+    v8::Local<v8::Value> monitor = getObjectProperty(process.As<v8::Object>(), "monitor" );
+    assert( Nan::Undefined() != monitor && monitor->IsObject());
+
+    return scope.Escape(monitor.As<v8::Object>());
+}
+
 
 void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
 
@@ -120,10 +161,8 @@ static void doSleep(int ms) {
     }
 }
 
-/*
- * Thread which reports the
- * status of the current process to the watcher
- * process.
+/**
+ * Thread which reports the status of the current process via UDP messages
  */
 void* monitorNodeThread(void *arg) {
     int errorCounter = 0;
@@ -158,7 +197,7 @@ void* monitorNodeThread(void *arg) {
         }
         if (!errorCounter) {
             if (!monitor.sendReport()) {
-                // slow down reporting if noone is listening
+                // slow down reporting if nobody is listening
                 ++errorCounter;
             }
         } else {
@@ -172,16 +211,35 @@ void* monitorNodeThread(void *arg) {
     exit(0);
 }
 
-NAUV_WORK_CB(updateLoopTimeStamp) {
+// Invoked when woken by monitr pthread via async_send
+NAUV_WORK_CB(UpdateStatisticsCallback) {
     NodeMonitor::getInstance().setStatistics();
 }
 
+static NAN_GETTER(GetterGCCount) {
+    NodeMonitor& monitor = NodeMonitor::getInstance();
+    GCUsageTracker& tracker = monitor.getGCUsageTracker();
+
+    info.GetReturnValue().Set(Nan::New<Number>(tracker.totalCollections()));
+}
+
+static NAN_GETTER(GetterGCElapsed) {
+    NodeMonitor& monitor = NodeMonitor::getInstance();
+    GCUsageTracker& tracker = monitor.getGCUsageTracker();
+
+    info.GetReturnValue().Set(Nan::New<Number>(tracker.totalElapsedTime() / (1000.0 * 1000.0) ));
+}
+
 static NAN_GC_CALLBACK(startGC) {
-    NodeMonitor::getInstance().getGCUsageTracker().GetGCUsage(type)->Start();
+    NodeMonitor& monitor = NodeMonitor::getInstance();
+    GCUsageTracker& tracker = monitor.getGCUsageTracker();
+    tracker.StartGC(type);
 }
 
 static NAN_GC_CALLBACK(stopGC) {
-    NodeMonitor::getInstance().getGCUsageTracker().GetGCUsage(type)->Stop();
+    NodeMonitor& monitor = NodeMonitor::getInstance();
+    GCUsageTracker& tracker = monitor.getGCUsageTracker();
+    tracker.StopGC(type);
 }
 
 static void InstallGCEventCallbacks() {
@@ -205,22 +263,83 @@ void NodeMonitor::Initialize(v8::Isolate* isolate) {
         return;
     }
     assert(0 != isolate);
-    instance_ = new NodeMonitor(isolate);
+    instance_ = new NodeMonitor(isolate); // calls protected constructor
+
+    instance_->InitializeProcessMonitorGCObject();
 }
 
 /**
+ * Initialize the unix domain socket and
+ * message which will transfer/contain the reports
+ */
+void NodeMonitor::InitializeIPC() {
+
+    ipcSocket_ = socket(PF_UNIX, SOCK_DGRAM, 0);
+    if (ipcSocket_ != -1) {
+        fcntl(ipcSocket_, F_SETFD, FD_CLOEXEC);
+    }
+
+    memset(&ipcAddr_, 0, sizeof(ipcAddr_));
+    ipcAddr_.sun_family = AF_UNIX;
+
+    strncpy(ipcAddr_.sun_path, _ipcMonitorPath.c_str(),
+            sizeof(ipcAddr_.sun_path));
+    ipcAddrLen_ = sizeof(ipcAddr_.sun_family) + strlen(ipcAddr_.sun_path) + 1;
+
+    memset(&msg_, 0, sizeof(msg_));
+
+    msg_.msg_name = &ipcAddr_;
+    msg_.msg_namelen = ipcAddrLen_;
+    msg_.msg_iovlen = 1;
+}
+
+
+/**
+ * Set up process.monitor.gc object and accessors for count/elapsed
+ * These can be read from Javascript user code space
+ **/
+void NodeMonitor::InitializeProcessMonitorGCObject() {
+    Nan::HandleScope scope;
+
+    v8::Local<v8::Object> monitor = getProcessMonitor();
+
+    // Create an object called "gc" with accessors for count/elapsed
+    // * count is # of times GC has run in this process
+    // * elapsed is the total duration for GC in milliseconds
+    //
+    // This is a "plain-old-data" object - i.e. it does not have
+    // any prototype and does not have a constructor function.
+    // For this reason, we don't need any FunctionTemplate etc.
+    // In addition, we only ever have one object per process, so
+    // an ObjectTemplate seems overkill as well.
+    {
+        v8::Local<v8::Object> gcObj = Nan::New<v8::Object>();
+        Nan::Set( monitor.As<v8::Object>(), v8_str("gc"), gcObj );
+
+        Nan::SetAccessor( gcObj, v8_str("count"), GetterGCCount, 0 );
+        Nan::SetAccessor( gcObj, v8_str("elapsed"), GetterGCElapsed, 0 );
+    }
+}
+
+/**
+ * Activate the monitor along with any required initialization
+ *
+ * Installs various callbacks/object setup that are valid only after
+ * the monitor is started.
  * Spawns a thread to monitor stats every REPORT_INTERVAL_MS
  */
 void NodeMonitor::Start() {
 
     assert( 0 != instance_ );
 
-    InstallGCEventCallbacks();
-
-    ipcSocket_ = socket(PF_UNIX, SOCK_DGRAM, 0);
-    if (ipcSocket_ != -1) {
-        fcntl(ipcSocket_, F_SETFD, FD_CLOEXEC);
+    // No need to do anything if we're already running
+    if ( running_ ) {
+        return;
     }
+    running_ = true;
+
+    InstallGCEventCallbacks();
+    InitializeIPC();
 
     /* Use a pipe to let the signal handler (which will likely be 
        executed in another thread) break out of pselect().
@@ -241,12 +360,14 @@ void NodeMonitor::Start() {
     }
 
 
-    // Set it up such that libuv will execute our callback function
-    // (updateLoopTimeStamp) each time through the default uv event loop
-    uv_async_init(uv_default_loop(), &check_loop_, updateLoopTimeStamp);
+    // Tell libuv to execute our callback function (updateStatistics)
+    // inside the libuv default event loop (the same as used by nodejs
+    // - i.e. inside the v8 Javascript context) when "signalled" by the
+    // monitr pthread via an uv_async_send
+    uv_async_init(uv_default_loop(), &check_loop_, &UpdateStatisticsCallback);
     uv_unref((uv_handle_t*) &check_loop_);
 
-    ipcInitialization();
+    // Go ahead and create the monitr pthread
     {
         int rc;
         rc = pthread_create(&tmonitor_, NULL, monitorNodeThread, NULL);
@@ -256,12 +377,21 @@ void NodeMonitor::Start() {
 
 
 /**
- * Update statistics each time through the libuv event loop
+ * Calculate and update statistics about current NodeJS process
  *
- * This gets called in the context of the node/v8 execution thread, so
- * it's no problem to call v8 specific APIs which may, in turn, invoke
- * their own callbacks into Javascript (e.g. the getIntFunction()
- * examples here)
+ * This function is invoked by libuv when "signalled" from the
+ * separate monitr thread, thus ensuring it runs inside the main libuv
+ * event loop (i.e. the same nodejs thread that runs v8).  Note: This signal
+ * is invoked by the uv_async_send() function which lets libuv know to
+ * invoke this callback at the next possible occasion.
+ *
+ * By doing so, we can call pure Javascript functions to obtain values
+ * that are collected within the Javascript layer itself,
+ * e.g. process.monitor.getRequestCount()
+ *
+ * The statistics themselves will then be sent via a UDP datagram
+ * at the conclusion of the next reporting interval (REPORT_INTERVAL_MS)
+ * by the monitr pthread
  **/
 void NodeMonitor::setStatistics() {
 
@@ -332,21 +462,6 @@ void NodeMonitor::setStatistics() {
     stats_.healthStatusCode_ = getIntFunction("getStatusCode");
     stats_.healthStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
 
-}
-
-void NodeMonitor::ipcInitialization() {
-    memset(&ipcAddr_, 0, sizeof(ipcAddr_));
-    ipcAddr_.sun_family = AF_UNIX;
-
-    strncpy(ipcAddr_.sun_path, _ipcMonitorPath.c_str(),
-            sizeof(ipcAddr_.sun_path));
-    ipcAddrLen_ = sizeof(ipcAddr_.sun_family) + strlen(ipcAddr_.sun_path) + 1;
-
-    memset(&msg_, 0, sizeof(msg_));
-
-    msg_.msg_name = &ipcAddr_;
-    msg_.msg_namelen = ipcAddrLen_;
-    msg_.msg_iovlen = 1;
 }
 
 CpuUsageTracker::CpuUsageTracker() {
@@ -462,37 +577,25 @@ void CpuUsageTracker::CalculateCpuUsage(CpuUsage* cur_usage,
 
 Local<Value> callFunction(const char* funcName) {
     Nan::EscapableHandleScope scope;
-    
-    Local<v8::Object> global = Nan::GetCurrentContext()->Global();
 
-    // We can assume that "process" is always a global object in node
-    Local<v8::Object> prObject = Nan::To<v8::Object>(global->Get(
-                                    Nan::New<v8::String>("process").ToLocalChecked())
-                                                     ).ToLocalChecked();
+    v8::Local<v8::Object> monitor = getProcessMonitor();
 
-    Nan::MaybeLocal<v8::Value> exten_maybe = prObject->Get(Nan::New<v8::String>("monitor").ToLocalChecked());
+    // Does funcName function exist on process.monitor object?
+    Nan::MaybeLocal<v8::Value> fval = Nan::Get(monitor, v8_str(funcName));
+    if (!fval.IsEmpty() && fval.ToLocalChecked()->IsFunction()) {
+        v8::Local<v8::Object> global = Nan::GetCurrentContext()->Global();
+        Nan::Callback callback( fval.ToLocalChecked().As<v8::Function>() );
 
-    // if monitor extension is not installed, then process.monitor may not exist
-    if (!exten_maybe.IsEmpty()) {
-        // but if it does exist, then it should always be an object
-        Local<v8::Object> extenObj = Nan::To<v8::Object>(exten_maybe.ToLocalChecked()).ToLocalChecked();
+        Local<v8::Value> result = callback(global, 0, 0 );
 
-        // Does funcName function exist on process.monitor object?
-        Nan::MaybeLocal<v8::Value> fval = extenObj->Get(Nan::New<v8::String>(funcName).ToLocalChecked());
-        if (!fval.IsEmpty() && fval.ToLocalChecked()->IsFunction()) {
-            Nan::Callback callback( fval.ToLocalChecked().As<v8::Function>() );
-
-            Local<v8::Value> result = callback(global, 0, 0 );
-
-            return scope.Escape(result);
-        }
+        return scope.Escape(result);
     }
     return Nan::Null();
         
 }
 
 
-GCUsage::GCUsage() {
+GCUsageTracker::GCUsage::GCUsage() {
     int rc = uv_mutex_init(&lock_);
     if (0 != rc) {
         perror("GCUsage: could not initialize uv_mutex");
@@ -502,18 +605,31 @@ GCUsage::GCUsage() {
     startTime_ = 0;
 }
 
-GCUsage::~GCUsage() {
+GCUsageTracker::GCUsage::~GCUsage() {
     uv_mutex_destroy(&lock_);
 }
 
-void GCUsage::Start() {
+/** Start() is called at the start of a GC event.
+ *
+ *  It runs inside the v8 isolate, so it is able to make calls to
+ *  Javascript functions, etc if required
+ **/
+void GCUsageTracker::GCUsage::Start() {
     startTime_ = uv_hrtime();
 }
 
-void GCUsage::Stop() {
+/** Stop() is called at the end of a GC event.
+ *
+ *  It runs inside the v8 isolate, so it is able to make
+ *  calls to Javascript functions, etc if required
+ **/
+uint64_t GCUsageTracker::GCUsage::Stop() {
     assert(0 != startTime_);
     uint64_t elapsed = uv_hrtime() - startTime_;
     {
+        // We need this lock to prevent the profiling monitr
+        // thread from potentially clearing the stats_ instance
+        // variable at the same time as we update it
         ScopedUVLock scope( &lock_ );
 
         stats_.numCalls++;
@@ -522,16 +638,23 @@ void GCUsage::Stop() {
             stats_.maxTime = elapsed;
         }
     }
+    return elapsed;
 }
 
 
-const GCStat GCUsage::EndInterval() {
+/** EndInterval() returns the last period of GC stats
+ *
+ *  It is called by the monitr profiling thread, so it is
+ *  not running inside the v8 isolate.  This means it needs
+ *  to be careful not to allocate memory on the v8 heap.
+ **/
+const GCStat GCUsageTracker::GCUsage::EndInterval() {
     GCStat lastStat;
     {
         ScopedUVLock scope( &lock_ );
 
         lastStat = stats_;
-        // now clear out stats since we've saved the last read
+        // now clear out stats since we've saved the last values
         bzero( &stats_, sizeof(GCStat) );
 
         // but don't clear out the startTime_ since we may be in
@@ -567,10 +690,12 @@ NodeMonitor& NodeMonitor::getInstance() {
 }
 
 /**
- * Sends udp JSON datagram approximately once per REPORT_INTERVAL_MS
+ * Sends UDP JSON datagram approximately once per REPORT_INTERVAL_MS
  *
  * Executed in the monitr pthread, *not* from a pthread executing v8
  * Therefore, we can't directly access any Javascript functions/vars
+ * and we need to ensure we don't stomp on any variables being modified
+ * by the running v8 Javascript thread
  **/
 bool NodeMonitor::sendReport() {
     static pid_t pid = getpid();
@@ -714,7 +839,7 @@ bool NodeMonitor::sendReport() {
 
         for (int i=0; i < GCUsageTracker::kNumGCTypes; ++i) {
             v8::GCType type = GCUsageTracker::indexTov8GCType(i);
-            const GCStat stat = tracker.GetGCUsage( type )->EndInterval();
+            const GCStat stat = tracker.EndInterval( type );
 
             snprintf(buffer, sizeof(buffer), "\"%s\":{", GCUsageTracker::indexToString(i) );
             data.append(buffer);
@@ -736,23 +861,32 @@ bool NodeMonitor::sendReport() {
     
     data.append("}}");
 
-    // Send datagram notification to the listener
-    // If Any
+    // Construct the datagram pointing to the message
     struct iovec vec;
 
     vec.iov_base = (void *) data.c_str();
     vec.iov_len = strlen((char *) vec.iov_base);
     msg_.msg_iov = &vec;
+
+    // Send it
     int rc = sendmsg(ipcSocket_, &msg_, MSG_DONTWAIT);
 
     if (!pending_) {
+        // Initialization of start_timestamp_ first time through
         start_timestamp_ = uv_hrtime();
         pending_ = 1;
     }
+
+    // notify libuv that it should run the UpdateStatistics callback
     uv_async_send(&check_loop_);
     return (rc != -1);
 }
 
+/**
+ * Stop monitoring
+ *
+ * Uninstall any callbacks for GC, stop the thread and close socket
+ */
 void NodeMonitor::Stop() {
     assert( 0 != instance_ );
 
@@ -760,9 +894,15 @@ void NodeMonitor::Stop() {
 
     pthread_cancel(tmonitor_);
     close(ipcSocket_);
+
+    running_ = false;
 }
 
+/**
+ * Create a new monitor instance based on the v8 isolate
+ */
 NodeMonitor::NodeMonitor(v8::Isolate* isolate) :
+    running_(false),
     startTime(0),
     gcTracker_(),
     tmonitor_((pthread_t) NULL),
@@ -945,7 +1085,7 @@ NAN_MODULE_INIT(init) {
     NodeMonitor::Initialize(v8::Isolate::GetCurrent());
     InstallDebugEventListeners(_show_backtrace);
     RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
-    
+
 }
 
 NODE_MODULE(monitor, init)

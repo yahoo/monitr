@@ -102,6 +102,45 @@ var expectedGCStatProperties = [
 
 var server1;
 
+var batch0 = {
+    'Verify process.monitor': {
+        topic: process.monitor,
+        'is an object': function(topic) {
+            assert.ok( "object" === typeof topic );
+        },
+        'with a gc property': function(topic) {
+            assert.ok( topic.gc );
+        },
+        'gc property': {
+            topic: function( monitor ) { return monitor.gc },
+            'is an object': function(gc) {
+                assert.ok("object" === typeof gc);
+            },
+            'has count and elapsed properties': {
+                topic: function( gc ) { return gc },
+                'which are numbers': function(gc) {
+                    assert.ok('number' === typeof(gc.count));
+                    assert.ok('number' === typeof(gc.elapsed));
+                },
+                'which are readonly': function(gc) {
+                    function getSetter( obj, prop ) {
+                        return Object.getOwnPropertyDescriptor( obj, prop).set
+                    }
+                    assert.ok( undefined === getSetter( gc, 'count' ) );
+                    assert.ok(undefined === getSetter(gc,'elapsed'));
+                    gc.count = 5;
+                    assert.notEqual(5,gc.count);
+                },
+                'which increase after a GC event': function(gc) {
+                    global.gc();
+                    assert.notEqual(0, gc.count);
+                    assert.notEqual(0, gc.elapsed);
+                },
+            }
+        }
+    }
+};
+
 var batch1 = {
     'Verify message sent from a server' : {
         topic: function () {
@@ -166,7 +205,7 @@ var batch1 = {
         'process.monitor functions should return values': function (topic) {
             assert.equal(1, topic.totalRequests);
             assert.equal(0, topic.requests);
-            assert.ok(topic.transferred !== 0);
+            assert.notEqual(0, topic.transferred);
         },
         'should have valid JSON output': function (topic) {
             assert.doesNotThrow(function() { JSON.parse(topic.msg); }, Error);
@@ -262,4 +301,8 @@ process.on('exit', function () {
     monitor.stop();
 });
 
-vows.describe('monitor').addBatch(batch1).addBatch(batch2).export(module);
+vows.describe('monitor')
+    .addBatch(batch0)
+    .addBatch(batch1)
+    .addBatch(batch2)
+    .export(module);

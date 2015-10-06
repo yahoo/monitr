@@ -1,27 +1,17 @@
 # monitr
 
-Nodejs process monitoring tool. 
+Nodejs process monitoring module
 
-This module currently works only on Linux operating systems.
-This module spawns a thread and begins monitoring the process. 
+This package is tested only with Node versions 0.10, 0.12 and 4.0.0.
 
-It looks up /proc/* files on the system to report CPU Usage.  It looks
-up /proc/pid/* files on the system to report its own stats.  It calls
-the process.monitor.* methods to report total requests since
-monitoring started (`reqstotal`), current requests in flight (`oreqs`),
-current open connections (`oconns`) and total data
-returned since monitoring started (`kb_trans`).  _Note: `oreqs` may be
-greater than `oconns` when keepalive is enabled_.
+_Note: This module currently works only on Linux operating systems_.
 
-It attaches to the v8 garbage collection hooks to
-instrument (for each GC type) the following stats in the past
-reporting interval.
+## External statistics reporting
 
-1.  `count` : number of times GC type invoked
-2.  `elapsed_ms`: total elapsed time nodejs thread is blocked
-3.  `max_ms`:  maximum time spent blocked by any one GC event
-
-process.monitor.* methods are set by lib/monitor.js.
+This module starts a separate thread within the Nodejs runtime that
+monitors and collects statistics about the running nodejs process.
+These statistics are then sent as JSON messages via UDP datagrams over
+a local domain socket.
 
 Here is the list of data the module reports periodically:
 ```
@@ -52,11 +42,16 @@ Here is the list of data the module reports periodically:
  }
 ```
 
+## GC introspection
 
-This package is tested only with Node versions 0.10, 0.12 and 4.0.0.
+It provides the running nodejs application with the ability to
+introspect garbage collection activity by creating read-only
+properties at `process.monitor.gc` that reports:
 
+1.  `count`: number of times GC stop-the-world events occurred
+2.  `elapsed`: cumulative time (in milliseconds) spent in GC
 
-# install
+# Installation
 
 With [npm](http://npmjs.org) do:
 
@@ -64,7 +59,7 @@ With [npm](http://npmjs.org) do:
 npm install monitr
 ```
 
-# methods
+# Usage
 ```js
 var monitor = require('monitr');
 ```
@@ -89,7 +84,7 @@ monitor.setIpcMonitorPath('/tmp/my-process-stats.mon');
 Sets the datagram socket name to write the stats. Defaults to /tmp/nodejs.mon
 
 # Health Status
-Monitr now supports custom health functionality whereby the app can report its own health.
+Monitr supports custom health functionality whereby the app can report its own health.
 The following methods are added to process.monitor to set and get the health information.
 ```js
 setHealthStatus(isDown, statusCode)
@@ -118,7 +113,7 @@ simulating a debugger event), there _is_ a performance slowdown for
 code running while the stack backtrace option is active.
 
 By default the backtrace option is not enabled.  You can enable it
-setting the `showBacktrace` property to true, e.g.
+by setting the `showBacktrace` property to true, e.g.
 
 ```js
 monitor.showBacktrace = true
@@ -127,9 +122,28 @@ monitor.showBacktrace = true
 Setting `monitor.showBacktrace` to `false` will restore the original
 performance by removing the debug event listener.
 
+# Implementation
+
+It looks up /proc/* files on the system to report CPU Usage.  It looks
+up /proc/pid/* files on the system to report its own stats.
+`process.monitor.*` methods are set by `lib/monitor.js`.
+
+It calls the process.monitor.* methods to report total requests since
+monitoring started (`reqstotal`), current requests in flight
+(`oreqs`), current open connections (`oconns`) and total data returned
+since monitoring started (`kb_trans`).  _Note: `oreqs` may be greater
+than `oconns` when keepalive is enabled_.
+
+It attaches to the v8 garbage collection hooks to instrument (for each
+GC type) the following stats for each reporting interval.
+
+1.  `count` : number of times GC type invoked
+2.  `elapsed_ms`: total elapsed time nodejs thread is blocked
+3.  `max_ms`:  maximum time spent blocked by any one GC event
+
 # Example
 
-Please refer to the examples/README.md for examples showing the use of these functions.
+Please refer to examples/README.md for examples showing the use of these functions.
 
 # Build Status
 
