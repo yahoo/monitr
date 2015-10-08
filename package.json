@@ -1,12 +1,14 @@
 {
   "name": "monitr",
   "description": "Node process monitoring tool",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Rohini Harendra <rohini.raghav@gmail.com>",
-  "contributors": [{
-    "name": "ET",
-    "email": "evan.torrie@yahoo.com"
-  }],
+  "contributors": [
+    {
+      "name": "ET",
+      "email": "evan.torrie@yahoo.com"
+    }
+  ],
   "os": [
     "linux"
   ],
