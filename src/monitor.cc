@@ -403,9 +403,9 @@ void NodeMonitor::setStatistics() {
         v8::HeapStatistics v8stats;
         Nan::GetHeapStatistics(&v8stats);
 
-        stats_.pmem_ = (v8stats.used_heap_size() / (double) v8stats.total_heap_size());
         stats_.usedheap_ = v8stats.used_heap_size();
         stats_.totalheap_ = v8stats.total_heap_size();
+        stats_.pmem_ = (stats_.usedheap_ / (double) stats_.totalheap_);
     }
 
     {   // Obtains the CPU usage
