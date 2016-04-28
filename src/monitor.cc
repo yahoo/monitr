@@ -53,7 +53,7 @@ static bool _show_backtrace = false;  //< default to false for performance
 // However, if there is no receiver on the other end (i.e. sendmsg()
 // returns -1), then the reporting thread will wait MAX_INACTIVITY_RETRIES
 // before trying again.
-static const int REPORT_INTERVAL_MS = 5000;
+static const int REPORT_INTERVAL_MS = 1000;
 static const int MAX_INACTIVITY_RETRIES = 5;
 
 /* globals used for signal catching, etc */
