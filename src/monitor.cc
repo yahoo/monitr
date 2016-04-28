@@ -404,6 +404,8 @@ void NodeMonitor::setStatistics() {
         Nan::GetHeapStatistics(&v8stats);
 
         stats_.pmem_ = (v8stats.used_heap_size() / (double) v8stats.total_heap_size());
+        stats_.usedheap_ = v8stats.used_heap_size();
+        stats_.totalheap_ = v8stats.total_heap_size();
     }
 
     {   // Obtains the CPU usage
@@ -785,6 +787,12 @@ bool NodeMonitor::sendReport() {
     if (!strstr(buffer, "nan")) {
         data.append(buffer);
     }
+
+    snprintf(buffer, sizeof(buffer), "\"usedheap\":%d,", stats.usedheap_);
+    data.append(buffer);
+
+    snprintf(buffer, sizeof(buffer), "\"totalheap\":%d,", stats.totalheap_);
+    data.append(buffer);
 
     // requests served since beginning 
     snprintf(buffer, sizeof(buffer), "\"reqstotal\":%d,", stats.lastRequests_);
