@@ -224,6 +224,10 @@ typedef struct {
     volatile time_t healthStatusTimestamp_;
 
     volatile double pmem_;
+
+    volatile int usedheap_;
+
+    volatile int totalheap_;
 } Statistics;
 
 

@@ -23,7 +23,9 @@ Here is the list of data the module reports periodically:
        utcstart: <when the process was started>,
        events: <number of new reports being processed since last stats reporting>,,
        cpu: <cpu usage>,
-       mem: <memory usage>,
+       mem: <ratio of used to total heap memory used>,
+       usedheap: <v8 heap memory used>,
+       totalheap: <v8 total heap size>,
        cpuperreq: <cpu usage per request>,
        oreqs: <current open requests count>,
        sys_cpu: <system cpu load>,
@@ -82,6 +84,24 @@ Terminates the thread and closes the socket.
 monitor.setIpcMonitorPath('/tmp/my-process-stats.mon');
 ```
 Sets the datagram socket name to write the stats. Defaults to /tmp/nodejs.mon
+
+## setReportInterval(ms)
+```js
+monitor.setReportInterval(1000);
+```
+Sets the report interval. Defaults to 1000ms. Integer.
+
+## setCustomName(name)
+```js
+monitor.setCustomName("processname");
+```
+Sets the custom process name. This will be sent as custom_name inside the JSON payload. String.
+
+## setCustomId(id)
+```js
+monitor.setCustomName("process-id");
+```
+Sets the custom process id. This will be sent as custom_id inside the JSON payload. String.
 
 # Health Status
 Monitr supports custom health functionality whereby the app can report its own health.

@@ -47,13 +47,16 @@ using namespace v8;
 // This is the default IPC path where the stats are written to
 // Could use the setter method to change this
 static string _ipcMonitorPath = "/tmp/nodejs.mon";
+static string _customName = "";
+static string _customId = "";
+
 static bool _show_backtrace = false;  //< default to false for performance
 
 // Normally reports will be sent every REPORT_INTERVAL_MS
 // However, if there is no receiver on the other end (i.e. sendmsg()
 // returns -1), then the reporting thread will wait MAX_INACTIVITY_RETRIES
 // before trying again.
-static const int REPORT_INTERVAL_MS = 1000;
+static int REPORT_INTERVAL_MS = 1000;
 static const int MAX_INACTIVITY_RETRIES = 5;
 
 /* globals used for signal catching, etc */
@@ -403,7 +406,9 @@ void NodeMonitor::setStatistics() {
         v8::HeapStatistics v8stats;
         Nan::GetHeapStatistics(&v8stats);
 
-        stats_.pmem_ = (v8stats.used_heap_size() / (double) v8stats.total_heap_size());
+        stats_.usedheap_ = v8stats.used_heap_size();
+        stats_.totalheap_ = v8stats.total_heap_size();
+        stats_.pmem_ = (stats_.usedheap_ / (double) stats_.totalheap_);
     }
 
     {   // Obtains the CPU usage
@@ -786,6 +791,18 @@ bool NodeMonitor::sendReport() {
         data.append(buffer);
     }
 
+    snprintf(buffer, sizeof(buffer), "\"custom_name\":\"%s\",", _customName.c_str());
+    data.append(buffer);
+
+    snprintf(buffer, sizeof(buffer), "\"custom_id\":\"%s\",", _customId.c_str());
+    data.append(buffer);
+
+    snprintf(buffer, sizeof(buffer), "\"usedheap\":%d,", stats.usedheap_);
+    data.append(buffer);
+
+    snprintf(buffer, sizeof(buffer), "\"totalheap\":%d,", stats.totalheap_);
+    data.append(buffer);
+
     // requests served since beginning 
     snprintf(buffer, sizeof(buffer), "\"reqstotal\":%d,", stats.lastRequests_);
     data.append(buffer);
@@ -1027,6 +1044,18 @@ static NAN_GETTER(GetterIPCMonitorPath) {
     info.GetReturnValue().Set(Nan::New<String>(_ipcMonitorPath.c_str()).ToLocalChecked());
 }
 
+static NAN_GETTER(GetterCustomName) {
+    info.GetReturnValue().Set(Nan::New<String>(_customName.c_str()).ToLocalChecked());
+}
+
+static NAN_GETTER(GetterReportInterval) {
+    info.GetReturnValue().Set(Nan::New<Number>(REPORT_INTERVAL_MS));
+}
+
+static NAN_GETTER(GetterCustomId) {
+    info.GetReturnValue().Set(Nan::New<String>(_customId.c_str()).ToLocalChecked());
+}
+
 static NAN_GETTER(GetterShowBackTrace) {
     info.GetReturnValue().Set(_show_backtrace);
 }
@@ -1047,6 +1076,35 @@ static NAN_METHOD(SetterIPCMonitorPath) {
     }
     String::Utf8Value ipcMonitorPath(info[0]);
     _ipcMonitorPath = *ipcMonitorPath;
+    info.GetReturnValue().SetUndefined();
+}
+
+static NAN_METHOD(SetterReportInterval) {
+    if (info.Length() < 1 ||
+        (!info[0]->IsNumber() && !info[0]->IsUndefined() && !info[0]->IsNull())) {
+        THROW_BAD_ARGS();
+    }
+    REPORT_INTERVAL_MS = info[0]->Uint32Value();
+    info.GetReturnValue().SetUndefined();
+}
+
+static NAN_METHOD(SetterCustomName) {
+    if (info.Length() < 1 ||
+        (!info[0]->IsString() && !info[0]->IsUndefined() && !info[0]->IsNull())) {
+        THROW_BAD_ARGS();
+    }
+    String::Utf8Value customName(info[0]);
+    _customName = *customName;
+    info.GetReturnValue().SetUndefined();
+}
+
+static NAN_METHOD(SetterCustomId) {
+    if (info.Length() < 1 ||
+        (!info[0]->IsString() && !info[0]->IsUndefined() && !info[0]->IsNull())) {
+        THROW_BAD_ARGS();
+    }
+    String::Utf8Value customId(info[0]);
+    _customId = *customId;
     info.GetReturnValue().SetUndefined();
 }
 
@@ -1076,9 +1134,21 @@ NAN_MODULE_INIT(init) {
     Nan::SetAccessor( exports, Nan::New("ipcMonitorPath").ToLocalChecked(),
                       GetterIPCMonitorPath, 0, v8::Local<v8::Value>(),
                       v8::PROHIBITS_OVERWRITING, v8::DontDelete );
+    Nan::SetAccessor( exports, Nan::New("customName").ToLocalChecked(),
+                      GetterCustomName, 0, v8::Local<v8::Value>(),
+                      v8::PROHIBITS_OVERWRITING, v8::DontDelete );
+    Nan::SetAccessor( exports, Nan::New("customId").ToLocalChecked(),
+                      GetterCustomId, 0, v8::Local<v8::Value>(),
+                      v8::PROHIBITS_OVERWRITING, v8::DontDelete );
+    Nan::SetAccessor( exports, Nan::New("reportInterval").ToLocalChecked(),
+                      GetterReportInterval, 0, v8::Local<v8::Value>(),
+                      v8::PROHIBITS_OVERWRITING, v8::DontDelete );
     Nan::SetAccessor( exports, Nan::New("showBacktrace").ToLocalChecked(),
                       GetterShowBackTrace, SetterShowBackTrace );
     Nan::Export( exports, "setIpcMonitorPath", SetterIPCMonitorPath);
+    Nan::Export( exports, "setReportInterval", SetterReportInterval);
+    Nan::Export( exports, "setCustomName", SetterCustomName);
+    Nan::Export( exports, "setCustomId", SetterCustomId);
     Nan::Export( exports, "start", StartMonitor);
     Nan::Export( exports, "stop", StopMonitor);
 
