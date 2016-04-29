@@ -463,6 +463,8 @@ void NodeMonitor::setStatistics() {
     stats_.healthIsDown_ = getBooleanFunction("isDown");
     stats_.healthStatusCode_ = getIntFunction("getStatusCode");
     stats_.healthStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
+    stats_.healthName_ = getStringFunction("getName");
+    stats_.healthId_ = getStringFunction("getId");
 
 }
 
@@ -686,6 +688,19 @@ bool NodeMonitor::getBooleanFunction(const char* funcName) {
     return false;
 }
 
+// calls a Javascript function which returns a string
+char* NodeMonitor::getStringFunction(const char* funcName) {
+    Nan::HandleScope scope;
+    Local<Value> res = callFunction(funcName);
+    String::Utf8Value cmd(res);
+    string s = string(*cmd);
+    return s;
+ //   if (res->IsName()) {
+//        return res->BooleanValue();
+//    }
+//    return "";
+}
+
 NodeMonitor& NodeMonitor::getInstance() {
     assert( 0 != instance_ );
     return *instance_;
@@ -835,6 +850,12 @@ bool NodeMonitor::sendReport() {
         data.append(buffer);
 
         snprintf(buffer, sizeof(buffer), "\"health_status_code\":%d,", stats.healthStatusCode_);
+        data.append(buffer);
+
+        snprintf(buffer, sizeof(buffer), "\"health_status_name\":%s,", stats.healthName_);
+        data.append(buffer);
+
+        snprintf(buffer, sizeof(buffer), "\"health_status_id\":%s,", stats.healthId_);
         data.append(buffer);
     }
 
