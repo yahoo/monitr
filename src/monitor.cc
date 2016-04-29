@@ -464,7 +464,7 @@ void NodeMonitor::setStatistics() {
     stats_.healthStatusCode_ = getIntFunction("getStatusCode");
     stats_.healthStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
     stats_.healthName_ = getStringFunction("getName");
-    stats_.healthId_ = getStringFunction("getId");
+//    stats_.healthId_ = getStringFunction("getId");
 
 }
 
@@ -689,12 +689,18 @@ bool NodeMonitor::getBooleanFunction(const char* funcName) {
 }
 
 // calls a Javascript function which returns a string
-char* NodeMonitor::getStringFunction(const char* funcName) {
+const char* NodeMonitor::getStringFunction(const char* funcName) {
     Nan::HandleScope scope;
     Local<Value> res = callFunction(funcName);
-    String::Utf8Value cmd(res);
-    string s = string(*cmd);
-    return s;
+    if(res->IsString()){
+      String::Utf8Value cmd(res->ToString());
+      std::string s = string(*cmd);
+//      return res->ToString();
+      return s.c_str();
+    }
+//    String::Utf8Value cmd(res);
+//    string s = string(*cmd);
+    return "";
  //   if (res->IsName()) {
 //        return res->BooleanValue();
 //    }
@@ -855,8 +861,8 @@ bool NodeMonitor::sendReport() {
         snprintf(buffer, sizeof(buffer), "\"health_status_name\":%s,", stats.healthName_);
         data.append(buffer);
 
-        snprintf(buffer, sizeof(buffer), "\"health_status_id\":%s,", stats.healthId_);
-        data.append(buffer);
+//        snprintf(buffer, sizeof(buffer), "\"health_status_id\":%s,", stats.healthId_);
+ //       data.append(buffer);
     }
 
     // append gc stats

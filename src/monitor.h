@@ -222,11 +222,8 @@ typedef struct {
     volatile int healthStatusCode_;
 
     // health status: name
-    volatile char* healthName_;
+    const char* healthName_;
     
-    // health status: id
-    volatile char* healthId_;
-
     volatile time_t healthStatusTimestamp_;
 
     volatile double pmem_;
@@ -308,7 +305,7 @@ private:
   
     static int getIntFunction(const char* funcName);
     static bool getBooleanFunction(const char* funcName);
-    static char* getStringFunction(const char* funcName);
+    static const char* getStringFunction(const char* funcName);
 
     static NodeMonitor* instance_;  //< the singleton instance
 
