@@ -47,6 +47,8 @@ using namespace v8;
 // This is the default IPC path where the stats are written to
 // Could use the setter method to change this
 static string _ipcMonitorPath = "/tmp/nodejs.mon";
+static string _customName = "";
+
 static bool _show_backtrace = false;  //< default to false for performance
 
 // Normally reports will be sent every REPORT_INTERVAL_MS
@@ -788,6 +790,9 @@ bool NodeMonitor::sendReport() {
         data.append(buffer);
     }
 
+    snprintf(buffer, sizeof(buffer), "\"custom_name\":\"%s\",", _customName.c_str());
+    data.append(buffer);
+
     snprintf(buffer, sizeof(buffer), "\"usedheap\":%d,", stats.usedheap_);
     data.append(buffer);
 
@@ -1035,6 +1040,10 @@ static NAN_GETTER(GetterIPCMonitorPath) {
     info.GetReturnValue().Set(Nan::New<String>(_ipcMonitorPath.c_str()).ToLocalChecked());
 }
 
+static NAN_GETTER(GetterCustomName) {
+    info.GetReturnValue().Set(Nan::New<String>(_customName.c_str()).ToLocalChecked());
+}
+
 static NAN_GETTER(GetterShowBackTrace) {
     info.GetReturnValue().Set(_show_backtrace);
 }
@@ -1055,6 +1064,16 @@ static NAN_METHOD(SetterIPCMonitorPath) {
     }
     String::Utf8Value ipcMonitorPath(info[0]);
     _ipcMonitorPath = *ipcMonitorPath;
+    info.GetReturnValue().SetUndefined();
+}
+
+static NAN_METHOD(SetterCustomName) {
+    if (info.Length() < 1 ||
+        (!info[0]->IsString() && !info[0]->IsUndefined() && !info[0]->IsNull())) {
+        THROW_BAD_ARGS();
+    }
+    String::Utf8Value customName(info[0]);
+    _customName = *customName;
     info.GetReturnValue().SetUndefined();
 }
 
@@ -1084,9 +1103,13 @@ NAN_MODULE_INIT(init) {
     Nan::SetAccessor( exports, Nan::New("ipcMonitorPath").ToLocalChecked(),
                       GetterIPCMonitorPath, 0, v8::Local<v8::Value>(),
                       v8::PROHIBITS_OVERWRITING, v8::DontDelete );
+    Nan::SetAccessor( exports, Nan::New("customName").ToLocalChecked(),
+                      GetterCustomName, 0, v8::Local<v8::Value>(),
+                      v8::PROHIBITS_OVERWRITING, v8::DontDelete );
     Nan::SetAccessor( exports, Nan::New("showBacktrace").ToLocalChecked(),
                       GetterShowBackTrace, SetterShowBackTrace );
     Nan::Export( exports, "setIpcMonitorPath", SetterIPCMonitorPath);
+    Nan::Export( exports, "setCustomName", SetterCustomName);
     Nan::Export( exports, "start", StartMonitor);
     Nan::Export( exports, "stop", StopMonitor);
 
