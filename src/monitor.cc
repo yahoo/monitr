@@ -1048,6 +1048,10 @@ static NAN_GETTER(GetterCustomName) {
     info.GetReturnValue().Set(Nan::New<String>(_customName.c_str()).ToLocalChecked());
 }
 
+static NAN_GETTER(GetterReportInterval) {
+    info.GetReturnValue().Set(Nan::New<Number>(REPORT_INTERVAL_MS));
+}
+
 static NAN_GETTER(GetterCustomId) {
     info.GetReturnValue().Set(Nan::New<String>(_customId.c_str()).ToLocalChecked());
 }
@@ -1126,6 +1130,9 @@ NAN_MODULE_INIT(init) {
                       v8::PROHIBITS_OVERWRITING, v8::DontDelete );
     Nan::SetAccessor( exports, Nan::New("customId").ToLocalChecked(),
                       GetterCustomId, 0, v8::Local<v8::Value>(),
+                      v8::PROHIBITS_OVERWRITING, v8::DontDelete );
+    Nan::SetAccessor( exports, Nan::New("reportInterval").ToLocalChecked(),
+                      GetterReportInterval, 0, v8::Local<v8::Value>(),
                       v8::PROHIBITS_OVERWRITING, v8::DontDelete );
     Nan::SetAccessor( exports, Nan::New("showBacktrace").ToLocalChecked(),
                       GetterShowBackTrace, SetterShowBackTrace );
