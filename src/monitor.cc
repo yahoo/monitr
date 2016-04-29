@@ -858,7 +858,7 @@ bool NodeMonitor::sendReport() {
         snprintf(buffer, sizeof(buffer), "\"health_status_code\":%d,", stats.healthStatusCode_);
         data.append(buffer);
 
-        snprintf(buffer, sizeof(buffer), "\"health_status_name\":%s,", stats.healthName_);
+        snprintf(buffer, sizeof(buffer), "\"health_status_name\":\"%s\",", stats.healthName_);
         data.append(buffer);
 
 //        snprintf(buffer, sizeof(buffer), "\"health_status_id\":%s,", stats.healthId_);
