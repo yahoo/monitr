@@ -85,6 +85,24 @@ monitor.setIpcMonitorPath('/tmp/my-process-stats.mon');
 ```
 Sets the datagram socket name to write the stats. Defaults to /tmp/nodejs.mon
 
+## setReportInterval(ms)
+```js
+monitor.setReportInterval(1000);
+```
+Sets the report interval. Defaults to 1000ms. Integer.
+
+## setCustomName(name)
+```js
+monitor.setCustomName("processname");
+```
+Sets the custom process name. This will be sent as custom_name inside the JSON payload. String.
+
+## setCustomId(id)
+```js
+monitor.setCustomName("process-id");
+```
+Sets the custom process id. This will be sent as custom_id inside the JSON payload. String.
+
 # Health Status
 Monitr supports custom health functionality whereby the app can report its own health.
 The following methods are added to process.monitor to set and get the health information.
