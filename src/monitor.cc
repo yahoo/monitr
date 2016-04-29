@@ -56,7 +56,7 @@ static bool _show_backtrace = false;  //< default to false for performance
 // However, if there is no receiver on the other end (i.e. sendmsg()
 // returns -1), then the reporting thread will wait MAX_INACTIVITY_RETRIES
 // before trying again.
-static const int REPORT_INTERVAL_MS = 1000;
+static int REPORT_INTERVAL_MS = 1000;
 static const int MAX_INACTIVITY_RETRIES = 5;
 
 /* globals used for signal catching, etc */
@@ -1079,6 +1079,15 @@ static NAN_METHOD(SetterIPCMonitorPath) {
     info.GetReturnValue().SetUndefined();
 }
 
+static NAN_METHOD(SetterReportInterval) {
+    if (info.Length() < 1 ||
+        (!info[0]->IsNumber() && !info[0]->IsUndefined() && !info[0]->IsNull())) {
+        THROW_BAD_ARGS();
+    }
+    REPORT_INTERVAL_MS = info[0]->Uint32Value();
+    info.GetReturnValue().SetUndefined();
+}
+
 static NAN_METHOD(SetterCustomName) {
     if (info.Length() < 1 ||
         (!info[0]->IsString() && !info[0]->IsUndefined() && !info[0]->IsNull())) {
@@ -1137,6 +1146,7 @@ NAN_MODULE_INIT(init) {
     Nan::SetAccessor( exports, Nan::New("showBacktrace").ToLocalChecked(),
                       GetterShowBackTrace, SetterShowBackTrace );
     Nan::Export( exports, "setIpcMonitorPath", SetterIPCMonitorPath);
+    Nan::Export( exports, "setReportInterval", SetterReportInterval);
     Nan::Export( exports, "setCustomName", SetterCustomName);
     Nan::Export( exports, "setCustomId", SetterCustomId);
     Nan::Export( exports, "start", StartMonitor);
