@@ -30,11 +30,7 @@ function fib(n) {
 http.createServer(function (req, res) {
   res.writeHead(200, {'Content-Type': 'text/plain'});
   var parsedUrl = url.parse(req.url, true);
-  if (parsedUrl.pathname == "/toggle-backtrace") {
-      monitor.showBacktrace = ! monitor.showBacktrace;
-      res.end('Toggling backtrace to ' + monitor.showBacktrace + '\n');
-  }
-  else if (parsedUrl.pathname == "/gc") {
+  if (parsedUrl.pathname == "/gc") {
       if (typeof global.gc === 'function') {
           global.gc();
           res.end('Ran garbage collection explicitly');
