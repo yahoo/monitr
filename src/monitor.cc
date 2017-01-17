@@ -43,11 +43,9 @@
 using namespace std;
 using namespace v8;
 
-
 // This is the default IPC path where the stats are written to
 // Could use the setter method to change this
 static string _ipcMonitorPath = "/tmp/nodejs.mon";
-static bool _show_backtrace = false;  //< default to false for performance
 
 // Normally reports will be sent every REPORT_INTERVAL_MS
 // However, if there is no receiver on the other end (i.e. sendmsg()
@@ -161,6 +159,24 @@ static void doSleep(int ms) {
     }
 }
 
+static void Interrupter(v8::Isolate* isolate, void *data) {
+    const int kMaxFrames = 64;
+    v8::Local<StackTrace> stack = v8::StackTrace::CurrentStackTrace(isolate, kMaxFrames);
+    const int frameCount = stack->GetFrameCount();
+
+    fprintf(stderr, "Interrupted: (frames: %d of %d)\n", std::min(frameCount, kMaxFrames), frameCount);
+    for (int i = 0; i < stack->GetFrameCount(); ++i ) {
+        v8::Local<StackFrame> frame = stack->GetFrame( i );
+        int line = frame->GetLineNumber();
+        int col = frame->GetColumn();
+        v8::String::Utf8Value fn(frame->GetFunctionName());
+        v8::String::Utf8Value script(frame->GetScriptName());
+
+        fprintf(stderr, "    at %s (%s:%d:%d)\n",
+                fn.length() == 0 ? "<anonymous>" : *fn, *script, line, col);
+    }
+}
+
 /**
  * Thread which reports the status of the current process via UDP messages
  */
@@ -176,23 +192,9 @@ void* monitorNodeThread(void *arg) {
     while (true) {
         if (hup_fired) {
             siginfo_t *siginfo = &savedSigInfo;
-            std::cout << "Process " << getpid() << " received SIGHUP from Process (pid: "
-                      << siginfo->si_pid << " uid: " << siginfo->si_uid << ")" << std::endl;
+            fprintf(stderr, "Process %d received SIGHUP from pid %d\n", getpid(), siginfo->si_pid);
 
-            // We are calling DebugBreak from our monitor thread, which
-            // is running independently of the main v8 thread.
-            // Calling DebugBreak() from outside the thread is allowed, but
-            // setting a DebugEventListener() is *not*.
-            // v8 will try to make a debugger event callback when the next
-            // StackGuard check occurs (i.e. start/end functions, back loops)
-
-            if (_show_backtrace) {
-                // Only attempt to call DebugBreak() if we have the
-                // DebugEventHandler installed, since otherwise v8
-                // will *never* clear the DEBUGBREAK flag in the
-                // StackGuard thread_local inside v8
-                v8::Debug::DebugBreak(monitor.getIsolate());
-            }
+            monitor.getIsolate()->RequestInterrupt(Interrupter, 0);
             hup_fired = 0;
         }
         if (!errorCounter) {
@@ -923,89 +925,6 @@ NodeMonitor::NodeMonitor(v8::Isolate* isolate) :
 NodeMonitor::~NodeMonitor() {
 }
 
-
-void LogStackTrace(Handle<Object> obj) {
-    Nan::HandleScope scope;
-    try {
-        Local<Value> info[] = {};
-        Local<Value> frameCount = obj->Get(Nan::New<String>("frameCount").ToLocalChecked());
-        Local<Function> frameCountFunc = Local<Function>::Cast(frameCount);
-        Local<Value> frameCountVal = frameCountFunc->Call(obj, 0, info);
-        Local<Number> frameCountNum = frameCountVal->ToNumber();
-        
-        cout << "Stack Trace:" << endl;
-        
-        int totalFrames = frameCountNum->Value();
-        for(int i = 0; i < totalFrames; i++) {
-            Local<Value> frameNumber[] = {Nan::New<Number>(i)};
-            Local<Value> setSelectedFrame = obj->Get(Nan::New<String>("setSelectedFrame").ToLocalChecked());
-            Local<Function> setSelectedFrameFunc = Local<Function>::Cast(setSelectedFrame);
-            setSelectedFrameFunc->Call(obj, 1, frameNumber);
-            
-            Local<Value> frame = obj->Get(Nan::New<String>("frame").ToLocalChecked());
-            Local<Function> frameFunc = Local<Function>::Cast(frame);
-            Local<Value> frameVal = frameFunc->Call(obj, 0, info);
-            Local<Object> frameObj = frameVal->ToObject();
-            Local<Value> frameToText = frameObj->Get(Nan::New<String>("toText").ToLocalChecked());
-            Local<Function> frameToTextFunc = Local<Function>::Cast(frameToText);
-            Local<Value> frameToTextVal = frameToTextFunc->Call(frameObj, 0, info);
-            String::Utf8Value frameText(frameToTextVal);
-            cout << *frameText << endl;
-        }
-    } catch(exception  e) {
-        cerr << "Error occurred while logging stack trace:" << e.what() << endl;
-    }
-    
-}
-
-#if (NODE_MODULE_VERSION > 0x000B)
-static void DebugEventHandler2(const v8::Debug::EventDetails& event_details) {
-    if (event_details.GetEvent() != v8::Break) return; // ignore other Debugger events from v8
-
-    if (_show_backtrace) LogStackTrace(event_details.GetExecutionState());
-}
-#else
-static void DebugEventHandler(DebugEvent event,
-       Handle<Object> exec_state,
-       Handle<Object> event_data,
-       Handle<Value> data) {
-
-    if (event != v8::Break) return;
-
-    if (_show_backtrace) LogStackTrace(exec_state);
-}
-#endif
-
-    
-/** Will install/uninstall DebugEventListeners 
- * \param install true => install, false => uninstall
- *
- * Since this ends up making isolate-modifying calls to v8
- * it may be executed only from within the thread
- * that is executing the main v8 isolate.  In other words
- * it is *not* thread-safe/signal-safe.
- **/
-static void InstallDebugEventListeners(bool install) {
-    if (install) {
-#if (NODE_MAJOR_VERSION > 0 || NODE_MINOR_VERSION >= 12 || (NODE_MINOR_VERSION >= 11 && NODE_PATCH_VERSION >= 15))
-        v8::Debug::SetDebugEventListener(DebugEventHandler2);
-#elif (NODE_MINOR_VERSION >= 11)
-        v8::Debug::SetDebugEventListener2(DebugEventHandler2);
-#else
-        v8::Debug::SetDebugEventListener(DebugEventHandler);
-#endif
-    }
-    else {
-#if (NODE_MAJOR_VERSION > 0 || NODE_MINOR_VERSION >= 12 || (NODE_MINOR_VERSION >= 11 && NODE_PATCH_VERSION >= 15))
-        v8::Debug::SetDebugEventListener(NULL);
-#elif (NODE_MINOR_VERSION >= 11)
-        v8::Debug::SetDebugEventListener2(NULL);
-#else
-        v8::Debug::SetDebugEventListener(NULL);
-#endif
-    }
-}
-    
 static void SignalHangupActionHandler(int signo, siginfo_t* siginfo,  void* context) {
     savedSigInfo = *siginfo;
     hup_fired = 1;
@@ -1027,17 +946,6 @@ static NAN_GETTER(GetterIPCMonitorPath) {
     info.GetReturnValue().Set(Nan::New<String>(_ipcMonitorPath.c_str()).ToLocalChecked());
 }
 
-static NAN_GETTER(GetterShowBackTrace) {
-    info.GetReturnValue().Set(_show_backtrace);
-}
-
-static NAN_SETTER(SetterShowBackTrace) {
-    bool newSetting = value->BooleanValue();
-    if (newSetting != _show_backtrace) {
-        _show_backtrace = newSetting;
-        InstallDebugEventListeners(_show_backtrace);
-    }
-}
 
 // methods that can be called from Javascript
 static NAN_METHOD(SetterIPCMonitorPath) {
@@ -1047,17 +955,14 @@ static NAN_METHOD(SetterIPCMonitorPath) {
     }
     String::Utf8Value ipcMonitorPath(info[0]);
     _ipcMonitorPath = *ipcMonitorPath;
-    info.GetReturnValue().SetUndefined();
 }
 
 static NAN_METHOD(StartMonitor) {
     NodeMonitor::getInstance().Start();
-    info.GetReturnValue().SetUndefined();
 }
 
 static NAN_METHOD(StopMonitor) {
     NodeMonitor::getInstance().Stop();
-    info.GetReturnValue().SetUndefined();
 }
 
 
@@ -1076,14 +981,11 @@ NAN_MODULE_INIT(init) {
     Nan::SetAccessor( exports, Nan::New("ipcMonitorPath").ToLocalChecked(),
                       GetterIPCMonitorPath, 0, v8::Local<v8::Value>(),
                       v8::PROHIBITS_OVERWRITING, v8::DontDelete );
-    Nan::SetAccessor( exports, Nan::New("showBacktrace").ToLocalChecked(),
-                      GetterShowBackTrace, SetterShowBackTrace );
     Nan::Export( exports, "setIpcMonitorPath", SetterIPCMonitorPath);
     Nan::Export( exports, "start", StartMonitor);
     Nan::Export( exports, "stop", StopMonitor);
 
     NodeMonitor::Initialize(v8::Isolate::GetCurrent());
-    InstallDebugEventListeners(_show_backtrace);
     RegisterSignalHandler(SIGHUP, SignalHangupActionHandler);
 
 }
