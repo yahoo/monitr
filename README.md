@@ -2,7 +2,8 @@
 
 Nodejs process monitoring module
 
-This package is tested only with Node versions 0.10, 0.12 and 4.0.0.
+This package is tested only with Node versions 0.12, 4.x, 6.x and 7.x.
+The last version to work with Node 0.10 is [v0.2.0](https://github.com/yahoo/monitr/tree/ed3baa61651ed7f1c6120eec5487645f143b7b57)
 
 _Note: This module currently works only on Linux operating systems_.
 
@@ -106,21 +107,6 @@ health_status_code: <health status code>
 print out a NodeJS stack backtrace of the Javascript currently being
 executed.  This can be useful for debugging where a NodeJS process may
 be _stuck_.
-
-Due to the method by which the stack backtrace is
-obtained (installing a v8 Javascript engine debug event listener and
-simulating a debugger event), there _is_ a performance slowdown for
-code running while the stack backtrace option is active.
-
-By default the backtrace option is not enabled.  You can enable it
-by setting the `showBacktrace` property to true, e.g.
-
-```js
-monitor.showBacktrace = true
-```
-
-Setting `monitor.showBacktrace` to `false` will restore the original
-performance by removing the debug event listener.
 
 # Implementation
 
