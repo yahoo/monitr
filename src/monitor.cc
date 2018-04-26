@@ -22,10 +22,6 @@
 // v8 compatibility templates
 #include "nan.h"
 
-// need v8-debug since we access the v8::Debug classes
-// in order to "break" into running Javascript
-#include <v8-debug.h>
-
 #include "monitor.h"
 
 #ifdef __APPLE__
@@ -107,11 +103,11 @@ static v8::Local<v8::Object> getProcessMonitor() {
 void RegisterSignalHandler(int signal, void (*handler)(int, siginfo_t *, void *)) {
 
     sigset_t blockset;
-    sigemptyset(&blockset);  
+    sigemptyset(&blockset);
     sigaddset(&blockset, SIGHUP);
     // block SIGHUP until we get to pselect() call to avoid race condition
     // See http://lwn.net/Articles/176911/
-    sigprocmask(SIG_BLOCK, &blockset, &savedBlockSet);  
+    sigprocmask(SIG_BLOCK, &blockset, &savedBlockSet);
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -343,7 +339,7 @@ void NodeMonitor::Start() {
     InstallGCEventCallbacks();
     InitializeIPC();
 
-    /* Use a pipe to let the signal handler (which will likely be 
+    /* Use a pipe to let the signal handler (which will likely be
        executed in another thread) break out of pselect().
        This is the standard DJ Bernstein pipe for handling signals
        in multi-thread programs technique - http://cr.yp.to/docs/selfpipe.html */
@@ -353,7 +349,7 @@ void NodeMonitor::Start() {
         if (pipe(fd)) {
             perror("Can't create pipe");
         }
-        sigpipefd_r = fd[0]; 
+        sigpipefd_r = fd[0];
         sigpipefd_w = fd[1];
         fcntl(sigpipefd_r, F_SETFL, fcntl(sigpipefd_r, F_GETFL) | O_NONBLOCK );
         fcntl(sigpipefd_r, F_SETFD, FD_CLOEXEC );
@@ -459,7 +455,7 @@ void NodeMonitor::setStatistics() {
         stats_.lastKBytesSecond = (dataTransferred - stats_.lastKBytesTransfered_) / (((double) timeDelta) / 1000);
         stats_.lastKBytesTransfered_ = dataTransferred;
     }
-    
+
     stats_.healthIsDown_ = getBooleanFunction("isDown");
     stats_.healthStatusCode_ = getIntFunction("getStatusCode");
     stats_.healthStatusTimestamp_ = (time_t) getIntFunction("getStatusTimestamp");
@@ -593,7 +589,7 @@ Local<Value> callFunction(const char* funcName) {
         return scope.Escape(result);
     }
     return Nan::Null();
-        
+
 }
 
 
@@ -675,7 +671,7 @@ int NodeMonitor::getIntFunction(const char* funcName) {
     }
     return 0;
 }
-    
+
 // calls a Javascript function which returns a boolean result
 bool NodeMonitor::getBooleanFunction(const char* funcName) {
     Nan::HandleScope scope;
@@ -767,7 +763,7 @@ bool NodeMonitor::sendReport() {
     snprintf(buffer, sizeof(buffer), "\"jiffyperreq\":%.6f,", stats.lastJiffiesPerReq_);
     if (!strstr(buffer, "nan")) {
         data.append(buffer);
-    }	
+    }
 
     snprintf(buffer, sizeof(buffer), "\"events\":%d,", diff_count);
     data.append(buffer);
@@ -788,7 +784,7 @@ bool NodeMonitor::sendReport() {
         data.append(buffer);
     }
 
-    // requests served since beginning 
+    // requests served since beginning
     snprintf(buffer, sizeof(buffer), "\"reqstotal\":%d,", stats.lastRequests_);
     data.append(buffer);
 
@@ -818,7 +814,7 @@ bool NodeMonitor::sendReport() {
     snprintf(buffer, sizeof(buffer), "\"kbs_out\":%.2f,", stats.lastKBytesSecond);
     if (!strstr(buffer, "nan")) {
         data.append(buffer);
-    }	
+    }
 
     if (stats.healthStatusTimestamp_ != 0) {
         snprintf(buffer, sizeof(buffer), "\"health_status_timestamp\":%ld,", stats.healthStatusTimestamp_);
@@ -860,7 +856,7 @@ bool NodeMonitor::sendReport() {
     }
 
     data.erase(data.size() - 1);; //get rid of last comma
-    
+
     data.append("}}");
 
     // Construct the datagram pointing to the message

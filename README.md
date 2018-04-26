@@ -2,8 +2,7 @@
 
 Nodejs process monitoring module
 
-This package is tested only with Node versions 0.12, 4.x, 6.x and 7.x.
-The last version to work with Node 0.10 is [v0.2.0](https://github.com/yahoo/monitr/tree/ed3baa61651ed7f1c6120eec5487645f143b7b57)
+This package is tested only with Node.js LTS versions.
 
 _Note: This module currently works only on Linux operating systems_.
 
@@ -16,7 +15,7 @@ a local domain socket.
 
 Here is the list of data the module reports periodically:
 ```
- { status: 
+ { status:
      { pid: <pid of the node process>,
        ts: <current time stamp>,
        cluster: <process group id>,
