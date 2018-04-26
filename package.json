@@ -37,19 +37,20 @@
     "node": ">=0.12"
   },
   "dependencies": {
-    "bindings": "*",
-    "nan": "^2.0.9"
+    "bindings": "^1.3.0",
+    "nan": "^2.10.0"
   },
   "devDependencies": {
-    "unix-dgram": "~0.2.0",
-    "jshint": "*",
-    "yui-lint": "~0.2.0",
-    "istanbul": "*",
-    "vows": "*"
+    "async": "^2.6.0",
+    "jenkins-mocha": "^6.0.0",
+    "jshint": "^2.9.5",
+    "mkdirp": "^0.5.1",
+    "unix-dgram": "^2.0.2",
+    "yui-lint": "~0.2.0"
   },
   "main": "./lib/monitor.js",
   "scripts": {
     "pretest": "jshint --config ./node_modules/yui-lint/jshint.json ./lib/",
-    "test": "node --expose-gc `which istanbul` cover --print both vows -- --spec ./tests/*.js"
+    "test": "NODE_ARGS=--expose-gc jenkins-mocha ./tests/*.js"
   }
 }
