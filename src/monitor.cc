@@ -162,11 +162,15 @@ static void Interrupter(v8::Isolate* isolate, void *data) {
 
     fprintf(stderr, "Interrupted: (frames: %d of %d)\n", std::min(frameCount, kMaxFrames), frameCount);
     for (int i = 0; i < stack->GetFrameCount(); ++i ) {
-        v8::Local<StackFrame> frame = stack->GetFrame( i );
+        v8::Local<StackFrame> frame = stack->GetFrame(
+#if defined(V8_MAJOR_VERSION) && (V8_MAJOR_VERSION >= 7)
+             isolate, 
+#endif
+             i );
         int line = frame->GetLineNumber();
         int col = frame->GetColumn();
-        v8::String::Utf8Value fn(frame->GetFunctionName());
-        v8::String::Utf8Value script(frame->GetScriptName());
+        Nan::Utf8String fn(frame->GetFunctionName());
+        Nan::Utf8String script(frame->GetScriptName());
 
         fprintf(stderr, "    at %s (%s:%d:%d)\n",
                 fn.length() == 0 ? "<anonymous>" : *fn, *script, line, col);
@@ -667,7 +671,8 @@ int NodeMonitor::getIntFunction(const char* funcName) {
     Nan::HandleScope scope;
     Local<Value> res = callFunction(funcName);
     if (res->IsNumber()) {
-        return res->Uint32Value();
+        uint32_t value = res->Uint32Value(Nan::GetCurrentContext()).FromJust();
+        return value;
     }
     return 0;
 }
@@ -677,7 +682,8 @@ bool NodeMonitor::getBooleanFunction(const char* funcName) {
     Nan::HandleScope scope;
     Local<Value> res = callFunction(funcName);
     if (res->IsBoolean()) {
-        return res->BooleanValue();
+        bool value = res->BooleanValue(Nan::GetCurrentContext()).FromJust();
+        return value;
     }
     return false;
 }
@@ -949,7 +955,7 @@ static NAN_METHOD(SetterIPCMonitorPath) {
         (!info[0]->IsString() && !info[0]->IsUndefined() && !info[0]->IsNull())) {
         THROW_BAD_ARGS();
     }
-    String::Utf8Value ipcMonitorPath(info[0]);
+    Nan::Utf8String ipcMonitorPath(info[0]);
     _ipcMonitorPath = *ipcMonitorPath;
 }
 
