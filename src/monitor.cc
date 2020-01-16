@@ -682,7 +682,12 @@ bool NodeMonitor::getBooleanFunction(const char* funcName) {
     Nan::HandleScope scope;
     Local<Value> res = callFunction(funcName);
     if (res->IsBoolean()) {
+#if V8_MAJOR_VERSION > 6 // after Node.js 10
+        v8::Isolate* isolate = v8::Isolate::GetCurrent();
+        bool value = res->BooleanValue(isolate);
+#else
         bool value = res->BooleanValue(Nan::GetCurrentContext()).FromJust();
+#endif
         return value;
     }
     return false;
