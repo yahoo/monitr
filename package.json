@@ -1,7 +1,7 @@
 {
   "name": "monitr",
   "description": "Node process monitoring tool",
-  "version": "1.2.0",
+  "version": "1.2.2",
   "author": "Rohini Harendra <rohini.raghav@gmail.com>",
   "contributors": [
     {
@@ -45,12 +45,12 @@
     "nan": "^2.10.0"
   },
   "devDependencies": {
-    "async": "^2.6.0",
-    "jenkins-mocha": "^6.0.0",
-    "jshint": "^2.9.5",
-    "mkdirp": "^0.5.1",
-    "unix-dgram": "^2.0.2",
-    "yui-lint": "~0.2.0"
+    "async": "^3.2.4",
+    "jenkins-mocha": "^11.0.0",
+    "jshint": "^2.13.6",
+    "mkdirp": "^3.0.1",
+    "unix-dgram": "^2.0.6",
+    "yui-lint": "^0.2.0"
   },
   "main": "./lib/monitor.js",
   "scripts": {
