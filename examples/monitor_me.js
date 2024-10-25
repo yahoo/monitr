@@ -18,50 +18,50 @@ var http = require('http'),
 monitor.start();
 
 function fib(n) {
-  if (n<2)
-    return 1;
-  else
-    return fib(n-2) + fib(n-1);
+    if (n<2)
+        return 1;
+    else
+        return fib(n-2) + fib(n-1);
 }
 
 /*
  * Start a simple http server
  */
 http.createServer(function (req, res) {
-  res.writeHead(200, {'Content-Type': 'text/plain'});
-  var parsedUrl = url.parse(req.url, true);
-  if (parsedUrl.pathname == "/gc") {
-      if (typeof global.gc === 'function') {
-          global.gc();
-          res.end('Ran garbage collection explicitly');
-      }
-      else {
-          res.end('global.gc() is not exposed');
-      }
-  }
-  else if (parsedUrl.pathname == "/fib") {
-    var param = parsedUrl.query.n || 20;
-    var startTime = new Date().getTime();
-    var result = fib(param);
-    var endTime = new Date().getTime();
-    res.end('Finished calculating fibonacci(' + param + ') = ' + result 
+    res.writeHead(200, {'Content-Type': 'text/plain'});
+    var parsedUrl = url.parse(req.url, true);
+    if (parsedUrl.pathname == '/gc') {
+        if (typeof global.gc === 'function') {
+            global.gc();
+            res.end('Ran garbage collection explicitly');
+        }
+        else {
+            res.end('global.gc() is not exposed');
+        }
+    }
+    else if (parsedUrl.pathname == '/fib') {
+        var param = parsedUrl.query.n || 20;
+        var startTime = new Date().getTime();
+        var result = fib(param);
+        var endTime = new Date().getTime();
+        res.end('Finished calculating fibonacci(' + param + ') = ' + result 
             + ' in ' + (endTime-startTime) + 'ms\n');
-  }
-  else {
-    res.end('I am being monitored\n');
-  }
-  //send health info
-  process.monitor.setHealthStatus(false,0);
+    }
+    else {
+        res.end('I am being monitored\n');
+    }
+    //send health info
+    process.monitor.setHealthStatus(false,0);
 }).listen(2000);
 
 /*
  * stop monitoring
  */
 process.on('exit', function () {
-   monitor.stop();
+    monitor.stop();
 });
 
 // Graceful shutdown
 process.on('SIGINT', function () {
-   process.exit();
+    process.exit();
 });

@@ -5,9 +5,7 @@ var assert = require('assert'),
     dgram = require('unix-dgram'),
     fs = require('fs'),
     http = require('http'),
-    mkdirp = require('mkdirp'),
-    monitor = require('../lib/monitor'),
-    path = require('path');
+    monitor = require('../lib/monitor');
 var defaultIpcMonitorPath = '/tmp/nodejs.mon',
     ipcMonitorPath = '/tmp/nodejs-test-' + process.pid + '.mon';
 
@@ -75,7 +73,7 @@ describe('monitr', function() {
                 assert.equal(typeof process.monitor.gc.count, 'number');
                 assert.equal(typeof process.monitor.gc.elapsed, 'number');
                 function getSetter( obj, prop ) {
-                    return Object.getOwnPropertyDescriptor( obj, prop).set
+                    return Object.getOwnPropertyDescriptor(obj, prop).set;
                 }
                 assert.ok(undefined === getSetter(process.monitor.gc, 'count'));
                 assert.ok(undefined === getSetter(process.monitor.gc, 'elapsed'));
@@ -157,7 +155,7 @@ describe('monitr', function() {
 
         it('should have valid JSON', function() {
             var msg = JSON.parse(topic.msg);
-            assert.ok(msg.hasOwnProperty('status'));
+            assert.ok(Object.prototype.hasOwnProperty.call(msg, 'status'));
             var status = msg.status;
             assert.deepEqual(expectedProperties.sort(), Object.keys(status).sort());
             var gc = status.gc;

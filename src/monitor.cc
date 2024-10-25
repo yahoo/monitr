@@ -987,7 +987,7 @@ NAN_MODULE_INIT(init) {
 
     Nan::SetAccessor( exports, Nan::New("ipcMonitorPath").ToLocalChecked(),
                       GetterIPCMonitorPath, 0, v8::Local<v8::Value>(),
-                      v8::PROHIBITS_OVERWRITING, v8::DontDelete );
+                      v8::DEFAULT, v8::DontDelete );
     Nan::Export( exports, "setIpcMonitorPath", SetterIPCMonitorPath);
     Nan::Export( exports, "start", StartMonitor);
     Nan::Export( exports, "stop", StopMonitor);
