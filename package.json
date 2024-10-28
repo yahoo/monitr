@@ -42,19 +42,22 @@
   },
   "dependencies": {
     "bindings": "^1.5.0",
-    "nan": "^2.17.0"
+    "nan": "^2.22.0"
   },
   "devDependencies": {
-    "async": "^3.2.4",
-    "jenkins-mocha": "^11.0.0",
-    "jshint": "^2.13.6",
-    "mkdirp": "^3.0.1",
-    "unix-dgram": "^2.0.6",
-    "yui-lint": "^0.2.0"
+    "@eslint/eslintrc": "^3.1.0",
+    "@eslint/js": "^9.13.0",
+    "async": "^3.2.6",
+    "eslint": "^9.13.0",
+    "eslint-plugin-mocha": "^10.5.0",
+    "global": "^4.4.0",
+    "mocha": "^10.7.3",
+    "nyc": "^17.1.0",
+    "unix-dgram": "^2.0.6"
   },
   "main": "./lib/monitor.js",
   "scripts": {
-    "pretest": "jshint --config ./node_modules/yui-lint/jshint.json ./lib/",
-    "test": "NODE_ARGS=--expose-gc jenkins-mocha ./tests/*.js"
+    "pretest": "eslint examples/*.js lib/*js tests/*.js",
+    "test": "nyc --report-dir artifacts/coverage --reporter text-summary --reporter lcov --cache=false mocha -n expose-gc tests/test-monitor.js"
   }
 }
